@@ -22,7 +22,7 @@
 - [X] **Task 1.5:** Implement a basic session/state management concept (even if single-client focused for now).
     - [X] Sub-task: Store negotiated capabilities after `initialize`.
 - [X] **Task 1.6:** Implement the `ping` utility MCP method (synchronous request/response).
-- [X] **Task 1.7:** Basic logging setup (e.g., `LogHiRezMCP` category).
+- [X] **Task 1.7:** Basic logging setup (e.g., `LogUnrealMCPServer` category).
 - [X] **Status:** Completed
 
 ## Phase 2: Basic Tool Implementation
@@ -33,75 +33,47 @@
     - [X] Sub-task: Define `FToolCallParams` and `FToolCallResult` USTRUCTs.
     - [X] Sub-task: Define `FContentPart` USTRUCTs (Text, Image initially).
     - [X] Sub-task: Implement tool execution logic (C++ focused, callable from MCP client via POST).
-    - [X] Sub-task: Ensure tool execution is asynchronous on a worker thread for long-running tasks, with the final result returned in the HTTP response.
-- [X] **Task 2.3:** Create 1-2 simple example C++ tools.
-    - [X] Example 1: C++ tool (e.g., "export_blueprint_to_t3d").
-    - [X] Example 2: C++ tool (e.g., "GetBasicEditorInfo").
-- ~~**Task 2.4:** Implement `notifications/tools/list_changed` server notification.~~ **(Deferred, requires SSE)**
+    - [X] Sub-task: Tool execution runs on game thread (marshaled from HTTP thread), with the final result returned in the HTTP response.
+- [X] **Task 2.3:** Create example C++ tools.
+    - [X] Implemented 7 tools: search_blueprints, export_asset, export_class_default, import_asset, query_asset, search_assets, get_project_config.
+- [ ] ~~**Task 2.4:** Implement `notifications/tools/list_changed` server notification.~~ **(Deferred, requires SSE)**
 - [X] **Status:** Completed
 
-## Phase 2B: Blueprint Search Tool Implementation
-- [X] **Task 2B.1:** Implement `search_blueprints` tool - Phase 1 (Basic Asset Discovery)
-    - [X] Sub-task: Research and understand Unreal's AssetRegistry API
-    - [X] Sub-task: Implement Blueprint asset discovery by name pattern matching
-    - [X] Sub-task: Implement Blueprint asset discovery by parent class inheritance
-    - [X] Sub-task: Add package path filtering and recursive search options
-    - [X] Sub-task: Define comprehensive input schema for search parameters
-- [ ] **Task 2B.2:** Implement `search_blueprints` tool - Phase 2 (Content Analysis)
-    - [ ] Sub-task: Implement Blueprint graph loading and analysis
-    - [ ] Sub-task: Add variable reference search within Blueprint content
-    - [ ] Sub-task: Add function call reference search within Blueprint content
-    - [ ] Sub-task: Add asset reference search within Blueprint content
-    - [ ] Sub-task: Add string literal search within Blueprint nodes
-- [ ] **Task 2B.3:** Implement comprehensive result formatting
-    - [ ] Sub-task: Design detailed result structure with match contexts
-    - [ ] Sub-task: Implement result aggregation and deduplication
-    - [ ] Sub-task: Add search metadata and statistics to results
-- [ ] **Task 2B.4:** Add error handling and performance optimizations
-    - [ ] Sub-task: Handle Blueprint loading failures gracefully
-    - [ ] Sub-task: Implement search result caching for performance
-    - [ ] Sub-task: Add progress reporting for long-running searches
-    - [ ] Sub-task: Implement search scope limitations and timeouts
-- [ ] **Task 2B.5:** Create comprehensive tests for search_blueprints tool
-    - [ ] Sub-task: Unit tests for each search type
-    - [ ] Sub-task: Integration tests with sample Blueprint content
-    - [ ] Sub-task: Performance tests with large Blueprint sets
-- [ ] **Status:** Phase 1 Completed - Basic Asset Discovery ✅
-
 ## Phase 3: Basic Resource Implementation
-- [ ] **Task 3.1:** Implement `resources/list` JSON-RPC method (synchronous response).
-    - [ ] Sub-task: Define `FResourceDefinition` USTRUCT.
-    - [ ] Sub-task: Implement resource discovery/registration mechanism.
-- [ ] **Task 3.2:** Implement `resources/get_content` JSON-RPC method (synchronous response).
-    - [ ] Sub-task: Define `FResourceContentParams` and `FResourceContentResult` USTRUCTs.
-    - [ ] Sub-task: Implement logic to retrieve resource content (e.g., T3D for a Blueprint).
-- [ ] **Task 3.3:** Implement `get_blueprint_contents` as a specific resource type or via `resources/get_content`.
-- ~~**Task 3.4:** Implement `notifications/resources/content_changed` server notification.~~ **(Deferred, requires SSE)**
-- [ ] **Status:** Not Started
+- [X] **Task 3.1:** Implement `resources/list` JSON-RPC method (synchronous response).
+    - [X] Sub-task: Define `FResourceDefinition` USTRUCT.
+    - [X] Sub-task: Implement resource discovery/registration mechanism.
+- [X] **Task 3.2:** Implement `resources/read` JSON-RPC method (synchronous response).
+    - [X] Sub-task: Define `FReadResourceParams` and `FReadResourceResult` USTRUCTs.
+    - [X] Sub-task: Implement logic to retrieve resource content (e.g., T3D for a Blueprint).
+- [X] **Task 3.3:** Implement resource templates with URI template support (`resources/templates/list`).
+    - [X] Implemented Blueprint T3D exporter as resource template (`unreal+t3d://{filepath}`).
+- [ ] ~~**Task 3.4:** Implement `notifications/resources/content_changed` server notification.~~ **(Deferred, requires SSE)**
+- [X] **Status:** Completed
 
 ## Phase 4: Advanced Features & Refinements (Non-SSE)
-- [ ] **Task 4.1:** Implement Prompts (`prompts/list`, `prompts/get_template`, `prompts/render`) (synchronous responses).
-    - [ ] Sub-task: Define `FPromptDefinition`, `FPromptTemplate`, `FPromptRenderParams`, `FPromptRenderResult` USTRUCTs.
+- [X] **Task 4.1:** Implement Prompts (`prompts/list`, `prompts/get`) (synchronous responses).
+    - [X] Sub-task: Define `FPromptDefinition`, `FGetPromptParams`, `FGetPromptResult` USTRUCTs.
+    - [X] Sub-task: Prompt framework implemented (no prompts currently registered).
 - [ ] **Task 4.2:** Implement `$/cancelRequest` client notification.
     - [ ] Sub-task: Server attempts to honor cancellation for ongoing asynchronous tasks.
-- [ ] **Task 4.3:** Robust error handling and reporting as JSON-RPC errors in HTTP responses.
-- [ ] **Task 4.4:** Threading improvements and performance testing (focus on synchronous request handling).
+- [X] **Task 4.3:** Robust error handling and reporting as JSON-RPC errors in HTTP responses.
+- [X] **Task 4.4:** Threading implementation (HTTP requests on server threads, UE access on game thread).
 - [ ] **Task 4.5 (Deferred):** Resource subscriptions (`resources/subscribe`, `notifications/resources/content_changed`). **(Deferred, requires SSE)**
 - [ ] **Task 4.6 (Deferred):** Implement `$/progress` server notification for long-running tool calls. **(Deferred, requires SSE)**
-- [ ] **Task 4.7:** Advanced Blueprint Search Features
-    - [ ] Sub-task: Implement regex pattern support for search terms
-    - [ ] Sub-task: Add fuzzy matching capabilities
-    - [ ] Sub-task: Implement cross-Blueprint dependency analysis
-    - [ ] Sub-task: Add search result export functionality
-- [ ] **Status:** Not Started
+- [X] **Status:** Partially Completed (Prompts framework done, error handling done, threading done)
 
 ## Phase 5: Security & Deployment
 - [ ] **Task 5.1:** Implement TLS (HTTPS) for secure communication. **(Deferred for initial implementation; HTTP will be used locally)**
     - [ ] Sub-task: Evaluate `FHttpServerModule` for HTTPS or select/integrate third-party library (for future implementation).
 - [ ] **Task 5.2:** Implement configuration options (port, features via INI/Editor Settings).
+    - [X] Sub-task: Port is configurable via code (`HttpServerPort` member variable).
+    - [ ] Sub-task: INI file configuration not yet implemented.
 - [ ] **Task 5.3:** Plugin packaging and end-to-end testing with a sample MCP client.
-- [ ] **Task 5.4:** Documentation for using the plugin.
-- [ ] **Status:** Not Started
+- [X] **Task 5.4:** Documentation for using the plugin.
+    - [X] README.md with installation and usage instructions.
+    - [X] Technical specification document.
+- [X] **Status:** Partially Completed (Documentation done, basic configuration available)
 
 ## Future Considerations (Post-Initial Implementation)
 - [ ] Implement Server-Sent Events (SSE) components of Streamable HTTP (including `Content-Type: text/event-stream` responses, client GET support for server-initiated streams, and features like `notifications/tools/list_changed`, `notifications/resources/content_changed`, `$/progress`, and `resources/subscribe`).
@@ -110,10 +82,3 @@
 - [ ] Explore advanced tool output (structured content beyond text/image).
 - [ ] Investigate more robust session management for multi-client scenarios.
 - [ ] Performance optimizations for high-throughput scenarios.
-- [ ] Advanced Blueprint Search Features:
-  - [ ] Visual search result generation with Blueprint thumbnails
-  - [ ] Interactive dependency graphs and visualization
-  - [ ] Bulk Blueprint modification operations
-  - [ ] Real-time search index updates
-  - [ ] Custom search filter definitions
-  - [ ] Integration with Unreal's native search systems

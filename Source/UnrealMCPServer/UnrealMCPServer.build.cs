@@ -28,11 +28,12 @@ public class UnrealMCPServer : ModuleRules
 			}
 			);
 			
-		PrivateDependencyModuleNames.AddRange(
+			PrivateDependencyModuleNames.AddRange(
 			new string[]
 			{
 				"CoreUObject",
 				"Engine",
+				"UnrealEd", // For ImportObjectProperties and editor functionality
 				"Slate",
 				"SlateCore",
 				"HTTPServer", // For HTTP server functionalities
@@ -40,7 +41,8 @@ public class UnrealMCPServer : ModuleRules
 				"JsonUtilities", // For FJsonObjectConverter
 				"HTTP",
 				"AssetRegistry", // For Blueprint search functionality
-				"BlueprintGraph" // For Blueprint graph analysis
+				"BlueprintGraph", // For Blueprint graph analysis
+				"AssetTools" // For UFactory and asset import functionality
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);

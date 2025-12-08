@@ -2,109 +2,82 @@
 
 ## Project Overview
 
-This project aims to create an Unreal Engine plugin (`UnrealMCPServer`) that functions as a Model Context Protocol (MCP) server. The server will expose Unreal Engine capabilities (assets, editor functions, game state) to external AI models and applications.
+This project implements an Unreal Engine plugin (`UnrealMCPServer`) that functions as a Model Context Protocol (MCP) server. The server exposes Unreal Engine capabilities (assets, editor functions, game state) to external AI models and applications.
 
-**Initial Approach (Superseded):** The first conceptualization of this project (see memory `584aa543-75aa-4a61-b75b-669eb9cad70e`) involved an MCP server operating via a raw TCP socket (port 30069) for JSON commands.
+**Current Status:** The core implementation is complete and functional. The server supports HTTP POST requests with JSON-RPC 2.0 messages. Server-Sent Events (SSE) and streaming features are deferred for future implementation.
 
-**Current Approach (HTTP/SSE):** Based on further research into standard MCP implementations (`.cursor/notes/MCP_Server_Implementation_Research.md`), the project will now implement the MCP server using **HTTP with Server-Sent Events (SSE)** for communication. This aligns better with common MCP practices.
+**Initial Approach (Superseded):** The first conceptualization of this project involved an MCP server operating via a raw TCP socket (port 30069) for JSON commands.
+
+**Current Implementation (HTTP):** The MCP server uses **HTTP POST** for communication. SSE/streaming support is planned for future implementation.
 
 ## Key Documentation
 
-*   **Technical Specification (Current):** `UnrealMCPServer_MCP_HTTP_Implementation_TechSpec.md` - This is the primary design document detailing the HTTP/SSE based MCP server architecture and implementation plan.
-*   **Project Checklist:** `project_checklist.md` - Tracks the progress of tasks based on the HTTP/SSE technical specification.
-*   **Search Blueprints Tool Specification:** `search_blueprints_tool_techspec.md` - Detailed technical specification for the new Blueprint search capability.
+*   **Technical Specification (Current):** `MCP_HTTP_Implementation_TechSpec.md` - This is the primary design document detailing the HTTP-based MCP server architecture and current implementation status.
+*   **Project Checklist:** `project_checklist.md` - Tracks the progress of tasks based on the HTTP technical specification.
 *   **MCP Research:** `MCP_Server_Implementation_Research.md` - Comprehensive notes on MCP principles, JSON-RPC, HTTP/SSE transport, core features (Tools, Resources, Prompts), and security.
 *   **Notebook:** `notebook.md` - General notes, findings, and ideas during development.
-*   **Old Technical Specification (Superseded):** `UnrealMCPServer_TechSpec.md` - This document detailed the older TCP-based approach and is now outdated.
 
-## Current Project Status
-
-### Phase 1 & 2: Core Framework ✅ COMPLETED
-- HTTP server with JSON-RPC handling
-- Basic MCP protocol implementation (initialize, ping, notifications)
-- Tools framework with `tools/list` and `tools/call` methods
-- Example tool: `export_blueprint_to_t3d`
-
-### Phase 2B: Blueprint Search Tool 🔄 IN PROGRESS
-**Next Major Feature:** `search_blueprints` tool implementation
-
-**Current Status:** ✅ **Phase 1 COMPLETED** - Basic Asset Discovery
-- ✅ Implemented Blueprint search by name pattern matching
-- ✅ Implemented Blueprint search by parent class inheritance  
-- ✅ Added package path filtering and recursive search
-- ✅ Created comprehensive JSON input/output schema
-- ✅ Added tool registration to MCP server
-
-**Implementation Details:**
-- Added AssetRegistry and BlueprintGraph module dependencies
-- Created `SearchBlueprints()` function in UMCP_CommonTools
-- Uses Unreal's Asset Registry API for fast metadata-based searches
-- Returns structured JSON results with match details and context
-- Supports three search types: "name", "parent_class", and "all"
-
-**Next Phase:** Content Analysis within Blueprint graphs (variables, functions, asset references)
-
-## Core Technical Details (HTTP/SSE Implementation)
+## Core Technical Details (HTTP Implementation)
 
 *   **Protocol:** Model Context Protocol (MCP) using JSON-RPC 2.0 messages.
-*   **Transport:** HTTP with Server-Sent Events (SSE).
-    *   Client-to-Server: HTTP POST requests (for MCP Requests/Notifications).
-    *   Server-to-Client: HTTP GET request establishes an SSE stream (for MCP Responses/Notifications).
-*   **Primary MCP Capabilities to Expose:**
-    *   Tools: Callable functions within Unreal Engine.
-    *   Resources: Access to Unreal Engine assets and data (e.g., Blueprint T3D, texture data).
-    *   Prompts: Templated interactions for LLMs.
+*   **Protocol Version:** "2024-11-05"
+*   **Transport:** HTTP POST requests (SSE/streaming deferred).
+    *   Client-to-Server: HTTP POST requests to `/mcp` endpoint (for MCP Requests/Notifications).
+    *   Server-to-Client: HTTP POST response with JSON body (for MCP Responses).
+    *   **SSE/Streaming:** Not yet implemented. All responses are synchronous JSON.
+*   **Primary MCP Capabilities Implemented:**
+    *   **Tools:** 7 tools implemented (search_blueprints, export_asset, export_class_default, import_asset, query_asset, search_assets, get_project_config).
+    *   **Resources:** URI template system with Blueprint T3D exporter (`unreal+t3d://{filepath}`).
+    *   **Prompts:** Framework implemented, no prompts currently registered.
 *   **Unreal Engine Integration:**
     *   Implemented as an Unreal Engine Plugin (`UnrealMCPServer`).
-    *   Utilize `FHttpServerModule` (initially) or a third-party C++ HTTP library.
-    *   Leverage Unreal's JSON parsing utilities (`FJsonObjectConverter`, `TJsonReader`/`Writer`).
-    *   Define MCP objects as `USTRUCT`s.
-    *   Manage threading carefully to avoid blocking the game thread.
+    *   Uses `FHttpServerModule` with `IHttpRouter` for HTTP handling.
+    *   Leverages Unreal's JSON parsing utilities (`FJsonObjectConverter`, `TJsonReader`/`Writer`).
+    *   All MCP objects defined as `USTRUCT`s in `UMCP_Types.h`.
+    *   Threading: HTTP requests processed on server threads, UE object access marshaled to game thread.
+*   **Key Features:**
+    *   JSON Schema generation from USTRUCTs (`UMCP_GenerateJsonSchemaFromStruct()`).
+    *   URI template parsing (RFC 6570) for dynamic resource discovery.
+    *   Type-safe parameter handling using USTRUCTs.
+    *   Structured output support for tools with outputSchema.
+
+## Implementation Status
+
+### ✅ Completed
+*   Core HTTP server with `/mcp` endpoint (port 30069).
+*   JSON-RPC 2.0 message handling (request/response parsing and serialization).
+*   MCP initialization handshake (`initialize`, `notifications/initialized`).
+*   Tool system with 7 implemented tools.
+*   Resource system with URI template support.
+*   Prompt framework (ready for use, no prompts registered yet).
+*   JSON Schema generation from USTRUCTs.
+*   Type-safe parameter handling.
+
+### ⏳ Deferred
+*   SSE/Streaming support (Server-Sent Events).
+*   HTTP GET endpoint for server-initiated streams.
+*   `notifications/tools/list_changed`, `notifications/resources/content_changed`.
+*   `resources/subscribe`, `$/progress`.
+*   `shutdown`, `exit`, `$/cancelRequest` methods.
+*   TLS (HTTPS) support.
+*   Session management.
 
 ## Development Approach
 
-*   Follow the phased implementation plan in `UnrealMCPServer_MCP_HTTP_Implementation_TechSpec.md` and `project_checklist.md`.
-*   **CURRENT PRIORITY:** Implement the `search_blueprints` tool as defined in `search_blueprints_tool_techspec.md`.
-*   Prioritize establishing core functionality before advanced features.
-*   Incrementally add MCP features (Tools, Resources, Prompts).
-*   Focus on robust error handling and logging throughout.
-*   Address security considerations (TLS/HTTPS) as a key part of later phases.
+*   Core HTTP communication and JSON-RPC handling are complete (Phase 1-3).
+*   Focus on adding more tools/resources/prompts as needed.
+*   Robust error handling and logging are in place.
+*   Security considerations (TLS/HTTPS) are deferred for future phases.
+*   SSE/streaming features are planned for future implementation.
 
-## Blueprint Search Tool Implementation Strategy
+## Python Client
 
-**Phase 1 (High Priority):** Basic asset discovery using AssetRegistry API
-- Find Blueprints by name pattern matching
-- Find Blueprint subclasses by parent class
-- Package path filtering and recursive search
-
-**Phase 2 (Medium Priority):** Content analysis within Blueprint graphs
-- Variable reference search
-- Function call reference search  
-- Asset reference search
-- String literal search within nodes
-
-**Phase 3 (Lower Priority):** Advanced features
-- Cross-Blueprint dependency analysis
-- Regex pattern support
-- Performance optimizations and caching
-
-## Key Unreal Engine APIs for Blueprint Search
-
-**Asset Discovery:**
-- `FAssetRegistryModule::Get().GetAssets()` - Find assets by filters
-- `FAssetRegistryModule::Get().GetDerivedClassNames()` - Find subclasses
-- `UAssetRegistryHelpers::GetBlueprintAssets()` - UE5+ Blueprint-specific search
-
-**Content Analysis:**
-- `UBlueprint::GetBlueprintGraph()` - Access Blueprint graphs
-- `UEdGraph::GetAllNodesOfClass()` - Find specific node types
-- Asset tagging system for metadata searches
+A corresponding Python client library can be developed to interact with the `UnrealMCPServer`. The client should implement HTTP POST communication (SSE support can be added later when server supports it).
 
 ## Agent Reminders
 
-*   Always refer to `UnrealMCPServer_MCP_HTTP_Implementation_TechSpec.md` for the current design.
-*   Reference `search_blueprints_tool_techspec.md` for Blueprint search implementation details.
+*   Always refer to `MCP_HTTP_Implementation_TechSpec.md` for the current design and implementation status.
 *   Ensure changes and progress are reflected in `project_checklist.md`.
 *   Keep `notebook.md` updated with any new findings or important details encountered during development.
 *   Adhere to user-defined rules, especially regarding code organization, testing, and documentation.
-*   **IMMEDIATE FOCUS:** Begin implementation of Phase 1 of the `search_blueprints` tool - basic asset discovery functionality.
+*   **Note:** The plugin name is `UnrealMCPServer`.

@@ -1,4 +1,4 @@
-﻿
+
 #pragma once
 
 #include "CoreMinimal.h"
@@ -25,6 +25,7 @@ public:
 	bool RegisterTool(FUMCP_ToolDefinition Tool);
 	bool RegisterResource(FUMCP_ResourceDefinition Resource);
 	bool RegisterResourceTemplate(FUMCP_ResourceTemplateDefinition ResourceTemplate);
+	bool RegisterPrompt(FUMCP_PromptDefinitionInternal Prompt);
 private:
     void HandleStreamableHTTPMCPRequest(const FHttpServerRequest& Request, const FHttpResultCallback& OnComplete);
 
@@ -43,6 +44,8 @@ private:
 	bool Rpc_ResourcesList(const FUMCP_JsonRpcRequest& Request, TSharedPtr<FJsonObject> OutSuccess, FUMCP_JsonRpcError& OutError);
 	bool Rpc_ResourcesTemplatesList(const FUMCP_JsonRpcRequest& Request, TSharedPtr<FJsonObject> OutSuccess, FUMCP_JsonRpcError& OutError);
 	bool Rpc_ResourcesRead(const FUMCP_JsonRpcRequest& Request, TSharedPtr<FJsonObject> OutSuccess, FUMCP_JsonRpcError& OutError);
+	bool Rpc_PromptsList(const FUMCP_JsonRpcRequest& Request, TSharedPtr<FJsonObject> OutSuccess, FUMCP_JsonRpcError& OutError);
+	bool Rpc_PromptsGet(const FUMCP_JsonRpcRequest& Request, TSharedPtr<FJsonObject> OutSuccess, FUMCP_JsonRpcError& OutError);
 
     TSharedPtr<IHttpRouter> HttpRouter;
     uint32 HttpServerPort = 30069;
@@ -51,4 +54,5 @@ private:
 	TMap<FString, FUMCP_ToolDefinition> Tools;
 	TMap<FString, FUMCP_ResourceDefinition> Resources;
 	TArray<TPair<FUMCP_UriTemplate, FUMCP_ResourceTemplateDefinition>> ResourceTemplates;
+	TMap<FString, FUMCP_PromptDefinitionInternal> Prompts;
 };

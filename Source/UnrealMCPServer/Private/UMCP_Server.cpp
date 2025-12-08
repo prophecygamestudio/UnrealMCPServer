@@ -1,4 +1,4 @@
-﻿#include "UMCP_Server.h"
+#include "UMCP_Server.h"
 #include "UMCP_Types.h"
 #include "UMCP_CommonTools.h"
 #include "UMCP_CommonResources.h"
@@ -121,6 +121,20 @@ bool FUMCP_Server::RegisterResourceTemplate(FUMCP_ResourceTemplateDefinition Res
 	return true;
 }
 
+bool FUMCP_Server::RegisterPrompt(FUMCP_PromptDefinitionInternal Prompt)
+{
+	if (!Prompt.GetPrompt.IsBound())
+	{
+		return false;
+	}
+	if (Prompts.Contains(Prompt.name))
+	{
+		return false;
+	}
+	Prompts.Add(Prompt.name, Prompt);
+	return true;
+}
+
 // Helper to send a JSON response
 void FUMCP_Server::SendJsonRpcResponse(const FHttpResultCallback& OnComplete, const FUMCP_JsonRpcResponse& RpcResponse)
 {
@@ -240,6 +254,16 @@ void FUMCP_Server::RegisterInternalRpcMethodHandlers()
 	{
 		return Rpc_ResourcesRead(Request, OutSuccess, OutError);
 	});
+
+	// Prompts
+	RegisterRpcMethodHandler(TEXT("prompts/list"), [this](const FUMCP_JsonRpcRequest& Request, TSharedPtr<FJsonObject> OutSuccess, FUMCP_JsonRpcError& OutError)
+	{
+		return Rpc_PromptsList(Request, OutSuccess, OutError);
+	});
+	RegisterRpcMethodHandler(TEXT("prompts/get"), [this](const FUMCP_JsonRpcRequest& Request, TSharedPtr<FJsonObject> OutSuccess, FUMCP_JsonRpcError& OutError)
+	{
+		return Rpc_PromptsGet(Request, OutSuccess, OutError);
+	});
 }
 
 bool FUMCP_Server::Rpc_Initialize(const FUMCP_JsonRpcRequest& Request, TSharedPtr<FJsonObject> OutSuccess, FUMCP_JsonRpcError& OutError)
@@ -304,6 +328,10 @@ bool FUMCP_Server::Rpc_ToolsList(const FUMCP_JsonRpcRequest& Request, TSharedPtr
 		ToolDef->SetStringField(TEXT("name"), Itr->Key);
 		ToolDef->SetStringField(TEXT("description"), Itr->Value.description);
 		ToolDef->SetObjectField(TEXT("inputSchema"), Itr->Value.inputSchema);
+		if (Itr->Value.outputSchema.IsValid())
+		{
+			ToolDef->SetObjectField(TEXT("outputSchema"), Itr->Value.outputSchema);
+		}
 		ResultTools.Add(MakeShared<FJsonValueObject>(MoveTemp(ToolDef)));
 	}
 	OutSuccess->SetArrayField(TEXT("tools"), MoveTemp(ResultTools));
@@ -338,6 +366,78 @@ bool FUMCP_Server::Rpc_ToolsCall(const FUMCP_JsonRpcRequest& Request, TSharedPtr
 		OutError.message = TEXT("Failed to serialize result");
 		return false;
 	}
+	
+	// If tool has an outputSchema and the result is not an error, extract structured content
+	if (Tool->outputSchema.IsValid() && !Result.isError && Result.content.Num() > 0)
+	{
+		// Try to parse the first text content as JSON to extract structured content
+		const FUMCP_CallToolResultContent& FirstContent = Result.content[0];
+		if (FirstContent.type == TEXT("text") && !FirstContent.text.IsEmpty())
+		{
+			TSharedPtr<FJsonObject> StructuredContent;
+			TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(FirstContent.text);
+			if (FJsonSerializer::Deserialize(Reader, StructuredContent) && StructuredContent.IsValid())
+			{
+				// Validate that the structured content has the required properties from the outputSchema
+				const TSharedPtr<FJsonObject>& Schema = Tool->outputSchema;
+				if (Schema.IsValid())
+				{
+					// Check if schema has a "required" array
+					const TArray<TSharedPtr<FJsonValue>>* RequiredArray = nullptr;
+					if (Schema->TryGetArrayField(TEXT("required"), RequiredArray) && RequiredArray)
+					{
+						bool bAllRequiredPresent = true;
+						for (const TSharedPtr<FJsonValue>& RequiredValue : *RequiredArray)
+						{
+							FString RequiredField;
+							if (RequiredValue->TryGetString(RequiredField))
+							{
+								if (!StructuredContent->HasField(RequiredField))
+								{
+									UE_LOG(LogUnrealMCPServer, Warning, TEXT("Tool '%s' structuredContent missing required field '%s'"), *Params.name, *RequiredField);
+									bAllRequiredPresent = false;
+								}
+							}
+						}
+						
+						if (!bAllRequiredPresent)
+						{
+							// Log the actual structure for debugging
+							FString StructuredContentStr;
+							TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&StructuredContentStr);
+							FJsonSerializer::Serialize(StructuredContent.ToSharedRef(), Writer);
+							UE_LOG(LogUnrealMCPServer, Warning, TEXT("Tool '%s' structuredContent structure: %s"), *Params.name, *StructuredContentStr);
+						}
+					}
+				}
+				
+				// Log the structured content for debugging (truncated if too long)
+				FString StructuredContentStr;
+				TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&StructuredContentStr);
+				FJsonSerializer::Serialize(StructuredContent.ToSharedRef(), Writer);
+				if (StructuredContentStr.Len() > 500)
+				{
+					UE_LOG(LogUnrealMCPServer, Verbose, TEXT("Tool '%s' structuredContent (truncated): %s"), *Params.name, *StructuredContentStr.Left(500));
+				}
+				else
+				{
+					UE_LOG(LogUnrealMCPServer, Verbose, TEXT("Tool '%s' structuredContent: %s"), *Params.name, *StructuredContentStr);
+				}
+				
+				// Add structuredContent field to the result
+				OutSuccess->SetObjectField(TEXT("structuredContent"), StructuredContent);
+			}
+			else
+			{
+				UE_LOG(LogUnrealMCPServer, Warning, TEXT("Failed to parse structured content from tool '%s' result text. Text length: %d"), *Params.name, FirstContent.text.Len());
+				if (FirstContent.text.Len() < 500)
+				{
+					UE_LOG(LogUnrealMCPServer, Warning, TEXT("Failed to parse text content: %s"), *FirstContent.text);
+				}
+			}
+		}
+	}
+	
 	return true;
 }
 
@@ -457,4 +557,120 @@ bool FUMCP_Server::Rpc_ResourcesRead(const FUMCP_JsonRpcRequest& Request, TShare
 	OutError.SetError(EUMCP_JsonRpcErrorCode::ResourceNotFound);
 	OutError.message = TEXT("Resource not found");
 	return false;
+}
+
+bool FUMCP_Server::Rpc_PromptsList(const FUMCP_JsonRpcRequest& Request, TSharedPtr<FJsonObject> OutSuccess, FUMCP_JsonRpcError& OutError)
+{
+	FUMCP_ListPromptsParams Params;
+	if (!UMCP_CreateFromJsonObject(Request.params, Params, true))
+	{
+		OutError.SetError(EUMCP_JsonRpcErrorCode::InvalidParams);
+		OutError.message = TEXT("Failed to parse list prompts params");
+		return false;
+	}
+
+	// Build prompts array manually (similar to tools)
+	TArray<TSharedPtr<FJsonValue>> ResultPrompts;
+	for (auto Itr = Prompts.CreateConstIterator(); Itr; ++Itr)
+	{
+		const FUMCP_PromptDefinitionInternal& PromptDef = Itr->Value;
+		auto PromptJson = MakeShared<FJsonObject>();
+		PromptJson->SetStringField(TEXT("name"), PromptDef.name);
+		if (!PromptDef.title.IsEmpty())
+		{
+			PromptJson->SetStringField(TEXT("title"), PromptDef.title);
+		}
+		if (!PromptDef.description.IsEmpty())
+		{
+			PromptJson->SetStringField(TEXT("description"), PromptDef.description);
+		}
+		
+		// Add arguments array if present
+		if (PromptDef.arguments.Num() > 0)
+		{
+			TArray<TSharedPtr<FJsonValue>> ArgumentsArray;
+			for (const FUMCP_PromptArgument& Arg : PromptDef.arguments)
+			{
+				auto ArgJson = MakeShared<FJsonObject>();
+				ArgJson->SetStringField(TEXT("name"), Arg.name);
+				if (!Arg.description.IsEmpty())
+				{
+					ArgJson->SetStringField(TEXT("description"), Arg.description);
+				}
+				ArgJson->SetBoolField(TEXT("required"), Arg.required);
+				ArgumentsArray.Add(MakeShared<FJsonValueObject>(ArgJson));
+			}
+			PromptJson->SetArrayField(TEXT("arguments"), ArgumentsArray);
+		}
+		
+		ResultPrompts.Add(MakeShared<FJsonValueObject>(MoveTemp(PromptJson)));
+	}
+	
+	OutSuccess->SetArrayField(TEXT("prompts"), MoveTemp(ResultPrompts));
+	// `nextCursor` is blank, since we return them all
+	OutSuccess->SetStringField(TEXT("nextCursor"), TEXT(""));
+	
+	return true;
+}
+
+bool FUMCP_Server::Rpc_PromptsGet(const FUMCP_JsonRpcRequest& Request, TSharedPtr<FJsonObject> OutSuccess, FUMCP_JsonRpcError& OutError)
+{
+	FUMCP_GetPromptParams Params;
+	if (!UMCP_CreateFromJsonObject(Request.params, Params))
+	{
+		OutError.SetError(EUMCP_JsonRpcErrorCode::InvalidParams);
+		OutError.message = TEXT("Failed to parse get prompt params");
+		return false;
+	}
+
+	if (Params.name.IsEmpty())
+	{
+		OutError.SetError(EUMCP_JsonRpcErrorCode::InvalidParams);
+		OutError.message = TEXT("Missing required parameter: name");
+		return false;
+	}
+
+	auto* Prompt = Prompts.Find(Params.name);
+	if (!Prompt)
+	{
+		OutError.SetError(EUMCP_JsonRpcErrorCode::InvalidParams);
+		OutError.message = FString::Printf(TEXT("Prompt not found: %s"), *Params.name);
+		return false;
+	}
+
+	if (!Prompt->GetPrompt.IsBound())
+	{
+		OutError.SetError(EUMCP_JsonRpcErrorCode::InternalError);
+		OutError.message = TEXT("Prompt has no bound delegate");
+		return false;
+	}
+
+	// Call the prompt delegate to get messages
+	TArray<FUMCP_PromptMessage> Messages = Prompt->GetPrompt.Execute(Params.arguments);
+
+	// Build result JSON
+	if (!Prompt->description.IsEmpty())
+	{
+		OutSuccess->SetStringField(TEXT("description"), Prompt->description);
+	}
+
+	// Convert messages to JSON array
+	TArray<TSharedPtr<FJsonValue>> MessagesArray;
+	for (const FUMCP_PromptMessage& Message : Messages)
+	{
+		auto MessageJson = MakeShared<FJsonObject>();
+		MessageJson->SetStringField(TEXT("role"), Message.role);
+		
+		// Add content object if present
+		if (Message.content.IsValid())
+		{
+			MessageJson->SetObjectField(TEXT("content"), Message.content);
+		}
+		
+		MessagesArray.Add(MakeShared<FJsonValueObject>(MoveTemp(MessageJson)));
+	}
+	
+	OutSuccess->SetArrayField(TEXT("messages"), MoveTemp(MessagesArray));
+	
+	return true;
 }

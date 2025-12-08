@@ -1,27 +1,39 @@
 # Unreal MCP Server Plugin
 
 **Version:** 0.1.0 (Beta)
-**Created By:** Hi-Rez Studios
+**Created By:** Prophecy Games, Inc
 
 ## Overview
 
-The Unreal MCP Server is an Unreal Engine plugin designed to implement an MCP (Model Context Protocol) server. Its primary goal is to facilitate interaction between AI agents and the Unreal Engine environment by exposing engine functionalities.
+The Unreal MCP Server is an Unreal Engine plugin that implements a Model Context Protocol (MCP) server. Its primary goal is to facilitate interaction between AI agents and the Unreal Engine environment by exposing engine functionalities through a standardized protocol.
 
-This plugin allows external applications, particularly AI agents, to query and potentially manipulate aspects of an Unreal Engine project in real-time.
+This plugin allows external applications, particularly AI agents, to query and manipulate aspects of an Unreal Engine project in real-time using the MCP standard.
 
 ## Features
 
-*   **TCP Server:** The plugin runs a TCP server, typically on port **30069** (this should be verified within the plugin's configuration or source if different).
-*   **JSON-Based Commands:** Communication with the server is handled via JSON-formatted messages.
-*   **Extensible Command Set:** Designed to support various commands for interacting with Unreal Engine. An initial example command is `get_blueprint_contents`, which retrieves the T3D representation of a Blueprint.
-*   **Editor Integration:** The plugin module is configured to run in the Editor (`"Type": "Editor"`).
+*   **HTTP Server:** The plugin runs an HTTP server on port **30069** (configurable).
+*   **MCP Protocol:** Implements the Model Context Protocol (MCP) using JSON-RPC 2.0 messages.
+*   **Protocol Version:** Supports MCP protocol version "2024-11-05".
+*   **Tools:** Provides 7 built-in tools for asset operations:
+    *   `search_blueprints` - Search for Blueprint assets by name, parent class, or comprehensive search
+    *   `export_asset` - Export any UObject to various formats (defaults to T3D)
+    *   `export_class_default` - Export class default objects (CDO) for inspection
+    *   `import_asset` - Import files to create or update UObjects
+    *   `query_asset` - Query single asset information from the asset registry
+    *   `search_assets` - Search for assets in package paths with optional class filtering
+    *   `get_project_config` - Retrieve project and engine configuration information
+*   **Resources:** URI template-based resource system for accessing Unreal Engine assets:
+    *   Blueprint T3D exporter via `unreal+t3d://{filepath}` URI scheme
+*   **Prompts:** Framework for templated prompt interactions (ready for use, no prompts currently registered)
+*   **JSON Schema:** Automatic JSON Schema generation from C++ USTRUCT definitions
+*   **Editor Integration:** The plugin module runs in the Editor (`"Type": "Editor"`).
 
 ## Getting Started
 
 ### Prerequisites
 
-*   Unreal Engine (version compatibility should be checked with your specific engine version).
-*   A C++ toolchain compatible with your Unreal Engine version for compiling the plugin if you are building from source.
+*   Unreal Engine 5.0 or later (compatibility should be verified with your specific engine version)
+*   A C++ toolchain compatible with your Unreal Engine version for compiling the plugin if you are building from source
 
 ### Installation
 
@@ -36,33 +48,69 @@ This plugin allows external applications, particularly AI agents, to query and p
     *   Ensure the "Enabled" checkbox is ticked.
     *   You may need to restart the Unreal Editor.
 
-3.  **Compile (if necessary):
+3.  **Compile (if necessary):**
     *   If you added the plugin to a C++ project, Unreal Engine might prompt you to recompile the project. Allow it to do so.
     *   If you are using a Blueprint-only project, you might need to convert it to a C++ project first (File -> New C++ Class... -> None -> Create Class, then close the editor and re-open the .sln to build).
 
 ### Usage
 
-1.  **Server Activation:** Once the plugin is enabled and the editor/project is running, the TCP server should automatically start listening on the configured port (e.g., 30069).
+1.  **Server Activation:** 
+    *   Once the plugin is enabled and the editor is running, the HTTP server automatically starts listening on port 30069.
+    *   Check the Unreal Engine output log for confirmation: `"HTTP Server started on port 30069"`.
+
 2.  **Client Connection:**
-    *   Develop a client application (e.g., using the companion `hirez_mcp_client` Python library or any other TCP client).
-    *   Connect the client to the Unreal Engine instance at `localhost:30069` (or the appropriate IP/port if configured differently).
-3.  **Sending Commands:**
-    *   Send JSON-formatted commands to the server.
-    *   Example (conceptual) for `get_blueprint_contents`:
+    *   Develop a client application using any HTTP client library (e.g., Python `requests`, `httpx`, or a companion MCP client library).
+    *   Connect the client to the Unreal Engine instance at `http://localhost:30069/mcp`.
+
+3.  **MCP Protocol Usage:**
+    *   The server implements the MCP standard. Clients should follow the MCP initialization handshake:
+        1.  Send `initialize` request with protocol version
+        2.  Receive server capabilities
+        3.  Send `notifications/initialized` notification
+        4.  Begin using tools, resources, and prompts
+    
+    *   Example `initialize` request:
         ```json
         {
-          "command": "get_blueprint_contents",
-          "parameters": {
-            "blueprint_path": "/Game/Path/To/Your/Blueprint.Blueprint"
+          "jsonrpc": "2.0",
+          "id": 1,
+          "method": "initialize",
+          "params": {
+            "protocolVersion": "2024-11-05"
           }
         }
         ```
-4.  **Receiving Responses:** The server will respond with JSON-formatted data.
+    
+    *   Example `tools/call` request:
+        ```json
+        {
+          "jsonrpc": "2.0",
+          "id": 2,
+          "method": "tools/call",
+          "params": {
+            "name": "query_asset",
+            "arguments": {
+              "assetPath": "/Game/MyAsset"
+            }
+          }
+        }
+        ```
+
+4.  **Receiving Responses:** The server responds with JSON-RPC 2.0 formatted responses.
+
+## Architecture
+
+*   **Core Server:** `FUMCP_Server` - Main server class handling HTTP requests and JSON-RPC routing
+*   **Tools:** `FUMCP_CommonTools` - Registers and implements common MCP tools
+*   **Resources:** `FUMCP_CommonResources` - Registers and implements common MCP resources
+*   **Types:** `UMCP_Types.h` - All MCP data structures defined as USTRUCTs
+*   **HTTP Transport:** Uses Unreal Engine's `FHttpServerModule` for HTTP handling
 
 ## Repository Structure
 
 *   `Source/`: Contains the C++ source code for the plugin.
-    *   `UnrealMCPServer/`: Main module for the MCP server logic.
+    *   `UnrealMCPServer/Public/`: Public header files
+    *   `UnrealMCPServer/Private/`: Implementation files
 *   `Config/`: Configuration files for the plugin.
 *   `Binaries/`: Compiled binaries (platform-specific).
 *   `Intermediate/`: Temporary files generated during compilation.
@@ -73,6 +121,22 @@ This plugin allows external applications, particularly AI agents, to query and p
 ## Current Status
 
 This plugin is currently in **Beta**. Features and APIs might change.
+
+### Implementation Status
+
+*   ✅ Core HTTP server with JSON-RPC 2.0 support
+*   ✅ MCP initialization handshake
+*   ✅ 7 tools implemented
+*   ✅ Resource system with URI templates
+*   ✅ Prompt framework (ready for use)
+*   ⏳ SSE/Streaming support (deferred)
+*   ⏳ TLS/HTTPS support (deferred)
+*   ⏳ Session management (deferred)
+
+## Documentation
+
+For detailed technical documentation, see:
+*   `.cursor/notes/MCP_HTTP_Implementation_TechSpec.md` - Technical specification and implementation details
 
 ## Contributing
 

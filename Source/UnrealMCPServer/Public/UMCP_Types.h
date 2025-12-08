@@ -1,5 +1,16 @@
 #pragma once
 
+// NOTE: Property Naming Convention
+// All USTRUCT properties in this file use camelCase naming (e.g., "searchType", "objectPath") 
+// instead of Unreal Engine's standard PascalCase convention (e.g., "SearchType", "ObjectPath").
+// This is intentional and done to align with web/JSON standards where camelCase is the common convention.
+// While this breaks Unreal Engine coding standards, it is acceptable here because:
+// 1. These structures are primarily used for external API communication (MCP protocol)
+// 2. The JSON serialization uses EJsonObjectConversionFlags which standardizes case, converting
+//    PascalCase to camelCase by default unless SkipStandardizeCase is passed
+// 3. Web clients expect camelCase in JSON APIs, making this the more practical choice
+// 4. The external tooling ecosystem (MCP clients) follows web standards, not engine standards
+
 #include "CoreMinimal.h"
 #include "Dom/JsonObject.h"
 #include "Templates/SharedPointer.h"
@@ -132,6 +143,21 @@ UNREALMCPSERVER_API bool UMCP_ToJsonObject(const T& InStruct, TSharedPtr<FJsonOb
 	return FJsonObjectConverter::UStructToJsonObject(InStruct.StaticStruct(), &InStruct, OutJsonObject.ToSharedRef());
 }
 
+// Helper function to convert USTRUCT directly to JSON string
+// This is the common pattern used throughout the codebase
+template<typename T>
+UNREALMCPSERVER_API bool UMCP_ToJsonString(const T& InStruct, FString& OutJsonString)
+{
+	TSharedPtr<FJsonObject> JsonObject = MakeShared<FJsonObject>();
+	if (!UMCP_ToJsonObject(InStruct, JsonObject))
+	{
+		return false;
+	}
+	
+	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&OutJsonString);
+	return FJsonSerializer::Serialize(JsonObject.ToSharedRef(), Writer);
+}
+
 template<typename T>
 UNREALMCPSERVER_API bool UMCP_CreateFromJsonObject(const TSharedPtr<FJsonObject>& JsonObject, T& OutStruct, bool bAllowMissingObject = false)
 {
@@ -165,7 +191,7 @@ struct FUMCP_ServerCapabilitiesTools
     bool inputSchema = true; // Whether server supports 'inputSchema' in ToolDefinition
 
     UPROPERTY()
-    bool outputSchema = false; // Whether server supports 'outputSchema' in ToolDefinition
+    bool outputSchema = true; // Whether server supports 'outputSchema' in ToolDefinition
 };
 
 USTRUCT()
@@ -314,9 +340,10 @@ struct UNREALMCPSERVER_API FUMCP_ToolDefinition
 	FString description;
 
 	TSharedPtr<FJsonObject> inputSchema;
+	TSharedPtr<FJsonObject> outputSchema; // Optional output schema for tools with well-known output formats
 	FUMCP_ToolCall DoToolCall;
 
-	FUMCP_ToolDefinition(): name{}, description{}, inputSchema{ MakeShared<FJsonObject>() }, DoToolCall()
+	FUMCP_ToolDefinition(): name{}, description{}, inputSchema{ MakeShared<FJsonObject>() }, outputSchema{ nullptr }, DoToolCall()
 	{
 		inputSchema->SetStringField(TEXT("type"), TEXT("object"));
 	}
@@ -459,3 +486,431 @@ struct FUMCP_ListResourceTemplatesResult
 	UPROPERTY()
 	TArray<FUMCP_ResourceTemplateDefinition> resourceTemplates;
 };
+
+// Prompt-related USTRUCTs
+
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_PromptArgument
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString name;
+
+	UPROPERTY()
+	FString description;
+
+	UPROPERTY()
+	bool required = false;
+};
+
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_PromptDefinition
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString name;
+
+	UPROPERTY()
+	FString title; // Optional human-readable name
+
+	UPROPERTY()
+	FString description;
+
+	UPROPERTY()
+	TArray<FUMCP_PromptArgument> arguments;
+};
+
+USTRUCT()
+struct FUMCP_ListPromptsParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString cursor;
+};
+
+USTRUCT()
+struct FUMCP_ListPromptsResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TArray<FUMCP_PromptDefinition> prompts;
+
+	UPROPERTY()
+	FString nextCursor;
+};
+
+USTRUCT()
+struct FUMCP_GetPromptParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString name;
+
+	TSharedPtr<FJsonObject> arguments; // Optional arguments object
+};
+
+template<>
+FORCEINLINE bool UMCP_CreateFromJsonObject<FUMCP_GetPromptParams>(const TSharedPtr<FJsonObject>& JsonObject, FUMCP_GetPromptParams& OutStruct, bool bAllowMissingObject)
+{
+	if (!JsonObject.IsValid()) return bAllowMissingObject;
+	OutStruct.name = JsonObject->GetStringField(TEXT("name"));
+	if (JsonObject->HasTypedField<EJson::Object>(TEXT("arguments")))
+	{
+		OutStruct.arguments = JsonObject->GetObjectField(TEXT("arguments"));
+	}
+	return true;
+}
+
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_PromptContent
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString type; // "text", "image", "audio", or "resource"
+
+	// For text content
+	UPROPERTY()
+	FString text;
+
+	// For image/audio content
+	UPROPERTY()
+	FString data; // base64-encoded
+
+	UPROPERTY()
+	FString mimeType;
+
+	// For resource content
+	TSharedPtr<FJsonObject> resource; // Contains uri, mimeType, text/blob
+};
+
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_PromptMessage
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString role; // "user" or "assistant"
+
+	TSharedPtr<FJsonObject> content; // PromptContent as JSON object
+};
+
+USTRUCT()
+struct FUMCP_GetPromptResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString description;
+
+	UPROPERTY()
+	TArray<FUMCP_PromptMessage> messages;
+};
+
+DECLARE_DELEGATE_RetVal_OneParam(TArray<FUMCP_PromptMessage>, FUMCP_PromptGet, TSharedPtr<FJsonObject> /* arguments */);
+
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_PromptDefinitionInternal
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString name;
+
+	UPROPERTY()
+	FString title;
+
+	UPROPERTY()
+	FString description;
+
+	UPROPERTY()
+	TArray<FUMCP_PromptArgument> arguments;
+
+	FUMCP_PromptGet GetPrompt;
+};
+
+// Tool Parameter USTRUCTs for type-safe JSON Schema generation
+
+// SearchBlueprints tool parameters
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_SearchBlueprintsParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString searchType;
+
+	UPROPERTY()
+	FString searchTerm;
+
+	UPROPERTY()
+	FString packagePath;
+
+	UPROPERTY()
+	bool bRecursive = true;
+};
+
+// ExportAsset tool parameters
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_ExportAssetParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString objectPath;
+
+	UPROPERTY()
+	FString format = TEXT("T3D");
+};
+
+// ExportAsset output
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_ExportAssetResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bSuccess;
+
+	UPROPERTY()
+	FString objectPath;
+
+	UPROPERTY()
+	FString format;
+
+	UPROPERTY()
+	FString content; // The exported asset content
+
+	UPROPERTY()
+	FString error; // Error message if bSuccess is false
+};
+
+// ExportClassDefault tool parameters
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_ExportClassDefaultParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString classPath;
+
+	UPROPERTY()
+	FString format = TEXT("T3D");
+};
+
+// ExportClassDefault output
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_ExportClassDefaultResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bSuccess;
+
+	UPROPERTY()
+	FString classPath;
+
+	UPROPERTY()
+	FString format;
+
+	UPROPERTY()
+	FString content; // The exported class default object content
+
+	UPROPERTY()
+	FString error; // Error message if bSuccess is false
+};
+
+// ImportAsset tool parameters
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_ImportAssetParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString filePath;
+
+	UPROPERTY()
+	FString packagePath;
+};
+
+// QueryAsset tool parameters
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_QueryAssetParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString assetPath;
+
+	UPROPERTY()
+	bool bIncludeTags = false;
+};
+
+// SearchAssets tool parameters
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_SearchAssetsParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TArray<FString> packagePaths;
+
+	UPROPERTY()
+	TArray<FString> classPaths;
+
+	UPROPERTY()
+	bool bRecursive = true;
+
+	UPROPERTY()
+	bool bIncludeTags = false;
+};
+
+// GetProjectConfig tool parameters
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_GetProjectConfigParams
+{
+	GENERATED_BODY()
+};
+
+// Tool Output USTRUCTs
+// Note: SearchBlueprints and SearchAssets outputs have complex nested structures
+// that are built manually, so they don't have USTRUCT result types
+
+// ImportAsset output
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_ImportAssetResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bSuccess;
+
+	UPROPERTY()
+	int32 count = 0;
+
+	UPROPERTY()
+	FString filePath;
+
+	UPROPERTY()
+	FString packagePath;
+
+	UPROPERTY()
+	FString factoryClass;
+
+	UPROPERTY()
+	TArray<FString> importedObjects;
+
+	UPROPERTY()
+	FString error;
+};
+
+// QueryAsset output
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_QueryAssetResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bExists;
+
+	UPROPERTY()
+	FString assetPath;
+
+	UPROPERTY()
+	FString assetName;
+
+	UPROPERTY()
+	FString packagePath;
+
+	UPROPERTY()
+	FString classPath;
+
+	UPROPERTY()
+	FString objectPath;
+
+	UPROPERTY()
+	TMap<FString, FString> tags;
+};
+
+// GetProjectConfig output
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_EngineVersionInfo
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString full;
+
+	UPROPERTY()
+	int32 major;
+
+	UPROPERTY()
+	int32 minor;
+
+	UPROPERTY()
+	int32 patch;
+
+	UPROPERTY()
+	int32 changelist;
+};
+
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_ProjectPaths
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString engineDir;
+
+	UPROPERTY()
+	FString projectDir;
+
+	UPROPERTY()
+	FString projectContentDir;
+
+	UPROPERTY()
+	FString projectLogDir;
+
+	UPROPERTY()
+	FString projectSavedDir;
+
+	UPROPERTY()
+	FString projectConfigDir;
+
+	UPROPERTY()
+	FString projectPluginsDir;
+
+	UPROPERTY()
+	FString engineContentDir;
+
+	UPROPERTY()
+	FString enginePluginsDir;
+};
+
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_GetProjectConfigResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FUMCP_EngineVersionInfo engineVersion;
+
+	UPROPERTY()
+	FUMCP_ProjectPaths paths;
+};
+
+// Helper function to generate JSON Schema from USTRUCT
+// PropertyDescriptions: Map of property names to their descriptions
+// RequiredFields: Array of property names that are required
+// EnumValues: Map of property names to their enum values (for string enums)
+UNREALMCPSERVER_API TSharedPtr<FJsonObject> UMCP_GenerateJsonSchemaFromStruct(
+	const UScriptStruct* Struct,
+	const TMap<FString, FString>& PropertyDescriptions = TMap<FString, FString>(),
+	const TArray<FString>& RequiredFields = TArray<FString>(),
+	const TMap<FString, TArray<FString>>& EnumValues = TMap<FString, TArray<FString>>()
+);
