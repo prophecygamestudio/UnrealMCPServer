@@ -360,6 +360,13 @@ bool FUMCP_Server::Rpc_ToolsCall(const FUMCP_JsonRpcRequest& Request, TSharedPtr
 
 	FUMCP_CallToolResult Result;
 	Result.isError = !Tool->DoToolCall.Execute(Params.arguments, Result.content);
+	
+	// Flush the log file after tool execution to ensure all log entries are written before returning the response
+	if (GLog)
+	{
+		GLog->Flush();
+	}
+	
 	if (!UMCP_ToJsonObject(Result, OutSuccess))
 	{
 		OutError.SetError(EUMCP_JsonRpcErrorCode::InternalError);

@@ -14,14 +14,17 @@ This plugin allows external applications, particularly AI agents, to query and m
 *   **HTTP Server:** The plugin runs an HTTP server on port **30069** (configurable).
 *   **MCP Protocol:** Implements the Model Context Protocol (MCP) using JSON-RPC 2.0 messages.
 *   **Protocol Version:** Supports MCP protocol version "2024-11-05".
-*   **Tools:** Provides 7 built-in tools for asset operations:
-    *   `search_blueprints` - Search for Blueprint assets by name, parent class, or comprehensive search
-    *   `export_asset` - Export any UObject to various formats (defaults to T3D)
-    *   `export_class_default` - Export class default objects (CDO) for inspection
-    *   `import_asset` - Import files to create or update UObjects
-    *   `query_asset` - Query single asset information from the asset registry
-    *   `search_assets` - Search for assets in package paths with optional class filtering
-    *   `get_project_config` - Retrieve project and engine configuration information
+*   **Tools:** Provides 8 built-in tools for asset operations and engine control:
+    *   **Asset Tools:**
+        *   `search_blueprints` - Search for Blueprint assets by name, parent class, or comprehensive search
+        *   `export_asset` - Export any UObject to various formats (defaults to T3D)
+        *   `export_class_default` - Export class default objects (CDO) for inspection
+        *   `import_asset` - Import files to create or update UObjects
+        *   `query_asset` - Query single asset information from the asset registry
+        *   `search_assets` - Search for assets in package paths with optional class filtering
+    *   **Common Tools:**
+        *   `get_project_config` - Retrieve project and engine configuration information
+        *   `execute_console_command` - Execute Unreal Engine console commands (e.g., `stat fps`, `showdebug ai`)
 *   **Resources:** URI template-based resource system for accessing Unreal Engine assets:
     *   Blueprint T3D exporter via `unreal+t3d://{filepath}` URI scheme
 *   **Prompts:** Framework for templated prompt interactions (ready for use, no prompts currently registered)
@@ -101,7 +104,9 @@ This plugin allows external applications, particularly AI agents, to query and m
 ## Architecture
 
 *   **Core Server:** `FUMCP_Server` - Main server class handling HTTP requests and JSON-RPC routing
-*   **Tools:** `FUMCP_CommonTools` - Registers and implements common MCP tools
+*   **Tools:** 
+    *   `FUMCP_CommonTools` - Registers and implements general-purpose MCP tools (project config, console commands)
+    *   `FUMCP_AssetTools` - Registers and implements asset-related MCP tools (search, export, import, query)
 *   **Resources:** `FUMCP_CommonResources` - Registers and implements common MCP resources
 *   **Types:** `UMCP_Types.h` - All MCP data structures defined as USTRUCTs
 *   **HTTP Transport:** Uses Unreal Engine's `FHttpServerModule` for HTTP handling
@@ -110,7 +115,17 @@ This plugin allows external applications, particularly AI agents, to query and m
 
 *   `Source/`: Contains the C++ source code for the plugin.
     *   `UnrealMCPServer/Public/`: Public header files
+        *   `UMCP_Server.h` - Main server class
+        *   `UMCP_CommonTools.h` - General-purpose tools
+        *   `UMCP_AssetTools.h` - Asset-related tools
+        *   `UMCP_CommonResources.h` - Resource definitions
+        *   `UMCP_Types.h` - MCP data structures
     *   `UnrealMCPServer/Private/`: Implementation files
+        *   `UMCP_Server.cpp` - Server implementation
+        *   `UMCP_CommonTools.cpp` - Common tools implementation
+        *   `UMCP_AssetTools.cpp` - Asset tools implementation
+        *   `UMCP_CommonResources.cpp` - Resources implementation
+        *   `UMCP_Types.cpp` - Type utilities
 *   `Config/`: Configuration files for the plugin.
 *   `Binaries/`: Compiled binaries (platform-specific).
 *   `Intermediate/`: Temporary files generated during compilation.
@@ -126,7 +141,7 @@ This plugin is currently in **Beta**. Features and APIs might change.
 
 *   ✅ Core HTTP server with JSON-RPC 2.0 support
 *   ✅ MCP initialization handshake
-*   ✅ 7 tools implemented
+*   ✅ 8 tools implemented
 *   ✅ Resource system with URI templates
 *   ✅ Prompt framework (ready for use)
 *   ⏳ SSE/Streaming support (deferred)

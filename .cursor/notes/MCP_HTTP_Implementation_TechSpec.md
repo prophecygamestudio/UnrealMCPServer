@@ -22,7 +22,8 @@ The MCP Server is implemented as part of an Unreal Engine plugin (`UnrealMCPServ
 *   **Lifecycle Management:** The server starts automatically when the plugin module loads and shuts down gracefully when the module unloads or the engine exits.
 *   **Core Classes:**
     *   `FUMCP_Server`: Main server class handling HTTP requests and JSON-RPC routing
-    *   `FUMCP_CommonTools`: Registers and implements common MCP tools
+    *   `FUMCP_CommonTools`: Registers and implements general-purpose MCP tools (project config, console commands)
+    *   `FUMCP_AssetTools`: Registers and implements asset-related MCP tools (search, export, import, query)
     *   `FUMCP_CommonResources`: Registers and implements common MCP resources
 
 ### 2.2. HTTP Server Implementation
@@ -157,14 +158,17 @@ USTRUCTs are defined for all MCP data types (ToolDefinition, Resource, Prompt, e
     *   Executes the tool via bound delegate (`FUMCP_ToolCall`).
     *   Output: `FUMCP_CallToolResult` (containing `content` array of `FUMCP_CallToolResultContent`, `isError` flag).
     *   **Structured Output Support:** If a tool defines an `outputSchema`, the server attempts to parse the tool's text output as JSON and includes it as `structuredContent` in the response.
-*   **Implemented Tools (in `FUMCP_CommonTools`):**
-    1.  **`search_blueprints`**: Search for Blueprint assets by name pattern, parent class, or comprehensive search. Supports package path filtering and recursive search.
-    2.  **`export_asset`**: Export any UObject to a specified format (defaults to T3D).
-    3.  **`export_class_default`**: Export the class default object (CDO) for a given class path.
-    4.  **`import_asset`**: Import a file to create or update a UObject. Automatically detects file type and uses appropriate factory.
-    5.  **`query_asset`**: Query a single asset to check if it exists and get basic information from the asset registry.
-    6.  **`search_assets`**: Search for assets in specified package paths, optionally filtered by class. Returns asset information from the asset registry.
-    7.  **`get_project_config`**: Retrieve project and engine configuration including engine version and directory paths.
+*   **Implemented Tools:**
+    *   **Asset Tools (in `FUMCP_AssetTools`):**
+        1.  **`search_blueprints`**: Search for Blueprint assets by name pattern, parent class, or comprehensive search. Supports package path filtering and recursive search.
+        2.  **`export_asset`**: Export any UObject to a specified format (defaults to T3D).
+        3.  **`export_class_default`**: Export the class default object (CDO) for a given class path.
+        4.  **`import_asset`**: Import a file to create or update a UObject. Automatically detects file type and uses appropriate factory.
+        5.  **`query_asset`**: Query a single asset to check if it exists and get basic information from the asset registry.
+        6.  **`search_assets`**: Search for assets in specified package paths, optionally filtered by class. Returns asset information from the asset registry.
+    *   **Common Tools (in `FUMCP_CommonTools`):**
+        7.  **`get_project_config`**: Retrieve project and engine configuration including engine version and directory paths.
+        8.  **`execute_console_command`**: Execute Unreal Engine console commands and return their output.
 *   **Tool Registration:** Tools are registered with input/output JSON schemas generated from USTRUCT definitions using `UMCP_GenerateJsonSchemaFromStruct()`.
 *   **`notifications/tools/list_changed`:**
     *   **Not implemented** (requires SSE).
@@ -264,7 +268,8 @@ USTRUCTs are defined for all MCP data types (ToolDefinition, Resource, Prompt, e
     *   Tools, resources, and prompts are registered via `FUMCP_Server::RegisterTool()`, `RegisterResource()`, `RegisterResourceTemplate()`, and `RegisterPrompt()`.
     *   Registration happens during module startup in `FUnrealMCPServerModule::StartupModule()`.
 *   **Common Implementations:**
-    *   `FUMCP_CommonTools`: Registers and implements common MCP tools for asset operations.
+    *   `FUMCP_CommonTools`: Registers and implements general-purpose MCP tools (project config, console commands).
+    *   `FUMCP_AssetTools`: Registers and implements asset-related MCP tools (search, export, import, query).
     *   `FUMCP_CommonResources`: Registers and implements common MCP resources for asset access.
     *   Additional tool/resource/prompt providers can be added by creating similar classes and registering them in the module.
 *   **Method Handler Registration:**
@@ -288,7 +293,8 @@ USTRUCTs are defined for all MCP data types (ToolDefinition, Resource, Prompt, e
 
 2.  **Tool Implementation**
     *   ✅ `tools/list` and `tools/call` (synchronous responses).
-    *   ✅ 7 common tools implemented (search_blueprints, export_asset, export_class_default, import_asset, query_asset, search_assets, get_project_config).
+    *   ✅ 8 tools implemented: 6 asset tools (search_blueprints, export_asset, export_class_default, import_asset, query_asset, search_assets) and 2 common tools (get_project_config, execute_console_command).
+    *   ✅ Tools organized into `FUMCP_AssetTools` (asset operations) and `FUMCP_CommonTools` (general-purpose operations).
     *   ✅ JSON Schema generation from USTRUCTs for tool input/output.
     *   ✅ Structured output support for tools with outputSchema.
     *   ✅ Type-safe parameter handling using USTRUCTs.

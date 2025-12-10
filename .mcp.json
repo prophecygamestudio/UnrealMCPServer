@@ -1,0 +1,9 @@
+{
+    "mcpServers": {
+       "unreal": {
+            "name": "UnrealMCPServer",
+            "url": "http://localhost:30069/mcp",
+            "type": "Streamable HTTP"
+        }
+    }
+}

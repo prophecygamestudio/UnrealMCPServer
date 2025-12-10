@@ -690,6 +690,47 @@ struct UNREALMCPSERVER_API FUMCP_ExportAssetResult
 	FString error; // Error message if bSuccess is false
 };
 
+// BatchExportAssets tool parameters
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_BatchExportAssetsParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	TArray<FString> objectPaths;
+
+	UPROPERTY()
+	FString outputFolder;
+
+	UPROPERTY()
+	FString format = TEXT("T3D");
+};
+
+// BatchExportAssets output
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_BatchExportAssetsResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bSuccess;
+
+	UPROPERTY()
+	int32 exportedCount = 0;
+
+	UPROPERTY()
+	int32 failedCount = 0;
+
+	UPROPERTY()
+	TArray<FString> exportedPaths; // List of successfully exported file paths
+
+	UPROPERTY()
+	TArray<FString> failedPaths; // List of asset paths that failed to export
+
+	UPROPERTY()
+	FString error; // Error message if bSuccess is false
+};
+
 // ExportClassDefault tool parameters
 USTRUCT()
 struct UNREALMCPSERVER_API FUMCP_ExportClassDefaultParams
@@ -732,10 +773,16 @@ struct UNREALMCPSERVER_API FUMCP_ImportAssetParams
 	GENERATED_BODY()
 
 	UPROPERTY()
-	FString filePath;
+	FString filePath; // Path to binary file (e.g., texture, mesh) - optional if t3dFilePath is provided
+
+	UPROPERTY()
+	FString t3dFilePath; // Path to T3D file for configuration - optional if filePath is provided
 
 	UPROPERTY()
 	FString packagePath;
+
+	UPROPERTY()
+	FString classPath;
 };
 
 // QueryAsset tool parameters
@@ -761,6 +808,9 @@ struct UNREALMCPSERVER_API FUMCP_SearchAssetsParams
 	TArray<FString> packagePaths;
 
 	UPROPERTY()
+	TArray<FString> packageNames;
+
+	UPROPERTY()
 	TArray<FString> classPaths;
 
 	UPROPERTY()
@@ -773,6 +823,23 @@ struct UNREALMCPSERVER_API FUMCP_SearchAssetsParams
 // GetProjectConfig tool parameters
 USTRUCT()
 struct UNREALMCPSERVER_API FUMCP_GetProjectConfigParams
+{
+	GENERATED_BODY()
+};
+
+// ExecuteConsoleCommand tool parameters
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_ExecuteConsoleCommandParams
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString command;
+};
+
+// GetLogFilePath tool parameters
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_GetLogFilePathParams
 {
 	GENERATED_BODY()
 };
@@ -902,6 +969,35 @@ struct UNREALMCPSERVER_API FUMCP_GetProjectConfigResult
 
 	UPROPERTY()
 	FUMCP_ProjectPaths paths;
+};
+
+// ExecuteConsoleCommand output
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_ExecuteConsoleCommandResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	bool bSuccess;
+
+	UPROPERTY()
+	FString command;
+
+	UPROPERTY()
+	FString output;
+
+	UPROPERTY()
+	FString error;
+};
+
+// GetLogFilePath output
+USTRUCT()
+struct UNREALMCPSERVER_API FUMCP_GetLogFilePathResult
+{
+	GENERATED_BODY()
+
+	UPROPERTY()
+	FString logFilePath;
 };
 
 // Helper function to generate JSON Schema from USTRUCT
