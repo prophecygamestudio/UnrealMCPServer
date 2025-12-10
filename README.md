@@ -101,6 +101,11 @@ This plugin allows external applications, particularly AI agents, to query and m
 
 4.  **Receiving Responses:** The server responds with JSON-RPC 2.0 formatted responses.
 
+5.  **T3D Format Specification:**
+    *   When working with T3D (Unreal Text File) format files for asset export, import, or analysis, it is recommended that your project rules reference the T3D format specification document.
+    *   This helps AI agents and developers understand the T3D file structure, syntax, and parsing guidelines.
+    *   See the [T3D Format Specification Reference](#t3d-format-specification-reference) section below for details on adding this reference to your project rules.
+
 ## Architecture
 
 *   **Core Server:** `FUMCP_Server` - Main server class handling HTTP requests and JSON-RPC routing
@@ -133,20 +138,53 @@ This plugin allows external applications, particularly AI agents, to query and m
 *   `LICENSE`: Contains the licensing information for this plugin.
 *   `README.md`: This file.
 
-## Current Status
+## T3D Format Specification Reference
 
-This plugin is currently in **Beta**. Features and APIs might change.
+When working with T3D (Unreal Text File) format files for asset export, import, or analysis, refer to the **T3D File Format Specification** document.
 
-### Implementation Status
+**Important:** Users should make sure their project references the T3D format specification in their project rules. This ensures that AI agents and developers have access to complete T3D format documentation when working with exported assets.
 
-*   ✅ Core HTTP server with JSON-RPC 2.0 support
-*   ✅ MCP initialization handshake
-*   ✅ 8 tools implemented
-*   ✅ Resource system with URI templates
-*   ✅ Prompt framework (ready for use)
-*   ⏳ SSE/Streaming support (deferred)
-*   ⏳ TLS/HTTPS support (deferred)
-*   ⏳ Session management (deferred)
+### Adding T3D Format Reference to Project Rules
+
+Add the following section to your project's rules or documentation:
+
+---
+
+## T3D File Format Reference
+
+When working with T3D (Unreal Text File) format files for asset export, import, or analysis, refer to the **T3D File Format Specification** document.
+
+**Reference:** See `Plugins/UnrealMCPServer/.cursor/docs/T3D_FORMAT_SPECIFICATION.md` for complete T3D format documentation, including:
+
+- File structure and syntax
+
+- Block types (Map, Level, Actor, Component, Brush)
+
+- Property formats and value types
+
+- Object reference syntax
+
+- Blueprint export format
+
+- Parsing guidelines for AI agents
+
+- Validation checklist
+
+- Common actor classes and examples
+
+**Key Use Cases:**
+
+- Exporting Unreal Engine assets to T3D format via MCP tools
+
+- Interpreting T3D files exported from Blueprints or other assets
+
+- Understanding object references and dependencies in exported assets
+
+- Validating T3D file structure and content
+
+---
+
+This reference helps ensure that when AI agents or developers interact with T3D files through the MCP server tools (such as `export_asset`, `import_asset`, or `export_class_default`), they have access to the complete format specification for proper interpretation and manipulation of T3D data.
 
 ## Documentation
 
