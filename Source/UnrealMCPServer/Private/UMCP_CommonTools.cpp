@@ -584,28 +584,42 @@ bool FUMCP_CommonTools::HandleCompilationComplete(ILiveCodingModule* LiveCodingM
 	{
 		// Read the last portion of the log file (last 50KB or so to get recent compilation output)
 		int64 LogFileSize = IFileManager::Get().FileSize(*UBTLogFilePath);
-		int64 BytesToRead = FMath::Min(LogFileSize, static_cast<int64>(50000)); // Read last 50KB
 		
-		if (BytesToRead > 0)
+		// Handle invalid file size (returns -1 on error)
+		if (LogFileSize > 0)
 		{
-			TUniquePtr<FArchive> FileReader = TUniquePtr<FArchive>(IFileManager::Get().CreateFileReader(*UBTLogFilePath));
-			if (FileReader.IsValid())
+			int64 BytesToRead = FMath::Min(LogFileSize, static_cast<int64>(50000)); // Read last 50KB
+			
+			if (BytesToRead > 0)
 			{
-				// Seek to the end minus the bytes we want to read
-				FileReader->Seek(LogFileSize - BytesToRead);
-				TArray<uint8> Buffer;
-				Buffer.SetNumUninitialized(BytesToRead);
-				FileReader->Serialize(Buffer.GetData(), BytesToRead);
-				FileReader->Close();
-				
-				// Convert to string
-				FFileHelper::BufferToString(UBTLogContent, Buffer.GetData(), Buffer.Num());
+				TUniquePtr<FArchive> FileReader = TUniquePtr<FArchive>(IFileManager::Get().CreateFileReader(*UBTLogFilePath));
+				if (FileReader.IsValid())
+				{
+					// Seek to the end minus the bytes we want to read
+					FileReader->Seek(LogFileSize - BytesToRead);
+					TArray<uint8> Buffer;
+					Buffer.SetNumUninitialized(BytesToRead);
+					FileReader->Serialize(Buffer.GetData(), BytesToRead);
+					FileReader->Close();
+					
+					// Convert to string
+					FFileHelper::BufferToString(UBTLogContent, Buffer.GetData(), Buffer.Num());
+				}
+			}
+			else if (LogFileSize == 0)
+			{
+				// File is empty, leave UBTLogContent empty
 			}
 		}
 		else
 		{
-			// File is small, read it all
-			FFileHelper::LoadFileToString(UBTLogContent, *UBTLogFilePath);
+			// File size is invalid or file is locked - try to read the whole file as fallback
+			// This may fail if the file is locked, but we'll handle that gracefully
+			if (!FFileHelper::LoadFileToString(UBTLogContent, *UBTLogFilePath))
+			{
+				// File read failed (might be locked) - continue without log content
+				UBTLogContent = TEXT("");
+			}
 		}
 	}
 
@@ -666,8 +680,12 @@ bool FUMCP_CommonTools::HandleCompilationComplete(ILiveCodingModule* LiveCodingM
 	if (!UMCP_ToJsonString(Result, Content.text))
 	{
 		Content.text = TEXT("Failed to serialize result");
+		UE_LOG(LogUnrealMCPServer, Error, TEXT("HandleCompilationComplete: Failed to serialize result"));
 		return false;
 	}
+
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("HandleCompilationComplete: Compilation %s (status: %s, errors: %d, warnings: %d)"), 
+		Result.bSuccess ? TEXT("succeeded") : TEXT("failed"), *Result.status, Result.errors.Num(), Result.warnings.Num());
 
 	return true;
 }

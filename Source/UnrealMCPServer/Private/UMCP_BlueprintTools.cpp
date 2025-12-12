@@ -27,7 +27,7 @@ void FUMCP_BlueprintTools::Register(class FUMCP_Server* Server)
 		InputDescriptions.Add(TEXT("searchType"), TEXT("Type of search to perform. 'name': Find Blueprints by name pattern (e.g., 'BP_Player*' finds all Blueprints starting with 'BP_Player'). 'parent_class': Find Blueprints that inherit from a class (e.g., 'Actor', 'Pawn', 'Character'). 'all': Comprehensive search across all criteria."));
 		InputDescriptions.Add(TEXT("searchTerm"), TEXT("Search term to match against. For 'name' type: Blueprint name pattern (e.g., 'BP_Player', 'Enemy'). For 'parent_class' type: Parent class name (e.g., 'Actor', 'Pawn', 'Character'). For 'all' type: Searches both name and parent class."));
 		InputDescriptions.Add(TEXT("packagePath"), TEXT("Optional package path to limit search scope. Examples: '/Game/Blueprints' searches in Blueprints folder, '/Game/Characters' searches in Characters folder. Uses Unreal's path format. If not specified, searches entire project."));
-		InputDescriptions.Add(TEXT("recursive"), TEXT("Whether to search recursively in subfolders. Defaults to true. Set to false to search only the specified packagePath directory without subdirectories."));
+		InputDescriptions.Add(TEXT("bRecursive"), TEXT("Whether to search recursively in subfolders. Defaults to true. Set to false to search only the specified packagePath directory without subdirectories."));
 		TArray<FString> InputRequired;
 		InputRequired.Add(TEXT("searchType"));
 		InputRequired.Add(TEXT("searchTerm"));

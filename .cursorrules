@@ -1,0 +1,111 @@
+# Project Rules for UnrealMCPServer and UnrealMCPProxy
+
+## Tool Definition Synchronization
+
+### Critical Rule: Tool Description Updates
+**When modifying tool descriptions, names, parameters, or schemas in the UnrealMCPServer plugin, you MUST also update the corresponding tool definitions in the UnrealMCPProxy.**
+
+This ensures the proxy can return accurate tool lists even when the Unreal Editor is offline.
+
+### Schema Synchronization Guide
+
+**IMPORTANT: See `UnrealMCPProxy/SCHEMA_SYNCHRONIZATION_GUIDE.md` for comprehensive best practices and common pitfalls.**
+
+Key points:
+- **Always run the test suite** before committing: `uv --directory UnrealMCPProxy run test_proxy.py`
+- **Match schemas exactly**: types, defaults, required fields, descriptions must match the backend
+- **Update both sides together**: backend changes and proxy changes in the same commit
+- **Use test output**: The test suite shows detailed differences when mismatches are detected
+- **Common pitfalls**: Wrong default types (300 vs 300.0), missing array defaults, expanding nested objects, adding descriptions that don't exist
+
+### Coordination Requirements
+
+1. **Tool Description Changes**
+   - If you modify a tool's description in `UMCP_CommonTools.cpp`, `UMCP_AssetTools.cpp`, or `UMCP_BlueprintTools.cpp`
+   - You MUST update the corresponding tool definition in `UnrealMCPProxy/src/unreal_mcp_proxy/tool_definitions.py` (or equivalent)
+   - Update both the cached tool definition and any conditional feature flags
+
+2. **New Tool Addition**
+   - When adding a new tool to the UnrealMCPServer plugin
+   - You MUST add the tool definition to the proxy's tool definitions file
+   - Include the full description, parameter schemas, and any conditional features
+   - Test that the proxy can list the tool when backend is offline
+
+3. **Parameter Schema Changes**
+   - If you modify input/output schemas (USTRUCT definitions)
+   - You MUST update the corresponding JSON schemas in the proxy
+   - Ensure parameter descriptions match between plugin and proxy
+
+4. **Conditional Features**
+   - Tools with conditional features (e.g., markdown export support) must be configurable via proxy environment variables
+   - When adding conditional features, document the environment variable in the proxy's `.env.example`
+   - Update proxy tool definitions to include/exclude conditional text based on configuration
+
+## Testing Requirements
+
+### Test Execution
+**All tests MUST be run using the `uv` tool, not via Python directly.**
+
+This ensures a compatible environment with end users and matches the production execution method.
+
+**Correct:**
+```bash
+uv --directory . run test_proxy.py
+```
+
+**Incorrect:**
+```bash
+python test_proxy.py  # DO NOT USE
+uv run test_proxy.py  # Missing --directory flag
+```
+
+**Rationale:**
+- End users run the proxy via `uv` (as specified in `mcp.json` configuration)
+- Using `uv` ensures consistent dependency resolution and environment isolation
+- Matches the production execution environment exactly
+
+### Files Requiring Synchronization
+
+**UnrealMCPServer Plugin:**
+- `Source/UnrealMCPServer/Private/UMCP_CommonTools.cpp`
+- `Source/UnrealMCPServer/Private/UMCP_AssetTools.cpp`
+- `Source/UnrealMCPServer/Private/UMCP_BlueprintTools.cpp`
+- `Source/UnrealMCPServer/Public/UMCP_CommonTools.h`
+- `Source/UnrealMCPServer/Public/UMCP_AssetTools.h`
+- `Source/UnrealMCPServer/Public/UMCP_BlueprintTools.h`
+
+**UnrealMCPProxy:**
+- `UnrealMCPProxy/src/unreal_mcp_proxy/tool_definitions.py` (or equivalent)
+- `UnrealMCPProxy/.env.example` (for conditional feature flags)
+
+### Conditional Features
+
+Tools with conditional features must be configurable via environment variables:
+
+- **Markdown Export Support**: Controlled by `UNREAL_MCP_PROXY_ENABLE_MARKDOWN_EXPORT` (default: `true`)
+  - Affects: `export_asset`, `batch_export_assets`, `export_blueprint_markdown`
+  - When enabled: Includes markdown format descriptions
+  - When disabled: Omits markdown-related text from descriptions
+
+### Verification Checklist
+
+Before committing changes that affect tool definitions:
+
+- [ ] Updated tool definition in UnrealMCPServer plugin
+- [ ] Updated corresponding tool definition in UnrealMCPProxy
+- [ ] Updated `.env.example` if conditional features were added/modified
+- [ ] **Tests run using `uv --directory UnrealMCPProxy run test_proxy.py` (not `python test_proxy.py`)**
+- [ ] **Schema comparison shows 0 mismatches** (all tools match backend)
+- [ ] Tested proxy can list tools when backend is offline
+- [ ] Verified conditional features work correctly with environment variables
+- [ ] Updated documentation if tool behavior changed
+- [ ] **Reviewed `SCHEMA_SYNCHRONIZATION_GUIDE.md` for any relevant pitfalls**
+
+### Tool Definition Format
+
+Tool definitions in the proxy should match the structure returned by the backend's `tools/list` method, including:
+- `name`: Tool name (must match exactly)
+- `description`: Full description (may include conditional text)
+- `inputSchema`: JSON schema for parameters
+- `outputSchema`: JSON schema for results (if applicable)
+
