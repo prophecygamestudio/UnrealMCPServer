@@ -14,17 +14,24 @@ This plugin allows external applications, particularly AI agents, to query and m
 *   **HTTP Server:** The plugin runs an HTTP server on port **30069** (configurable).
 *   **MCP Protocol:** Implements the Model Context Protocol (MCP) using JSON-RPC 2.0 messages.
 *   **Protocol Version:** Supports MCP protocol version "2024-11-05".
-*   **Tools:** Provides 8 built-in tools for asset operations and engine control:
+*   **Tools:** Provides 14 built-in tools for asset operations and engine control:
+    *   **Project & Configuration Tools:**
+        *   `get_project_config` - Retrieve project and engine configuration information including engine version, directory paths (Engine, Project, Content, Log, Saved, Config, Plugins), and other essential project metadata. Use this tool first to understand the project structure before performing asset operations.
+        *   `get_log_file_path` - Returns the absolute path of the Unreal Engine log file. Use this to locate log files for debugging. Log files are plain text and can be read with standard file reading tools.
+    *   **Editor Control Tools:**
+        *   `execute_console_command` - Execute an Unreal Engine console command and return its output. Common commands: `stat fps` (performance stats), `showdebug ai` (AI debugging), `r.SetRes 1920x1080` (set resolution), `open /Game/Maps/MainLevel` (load level), `stat unit` (frame timing). Note: Some commands modify editor state. Returns command output as a string.
+        *   `request_editor_compile` - Requests an editor compilation, waits for completion, and returns whether it succeeded or failed along with any build log generated. Use this after modifying C++ source files to recompile code changes without restarting the editor. Only works if the project has C++ code and live coding is enabled.
     *   **Asset Tools:**
-        *   `search_blueprints` - Search for Blueprint assets by name, parent class, or comprehensive search
-        *   `export_asset` - Export any UObject to various formats (defaults to T3D)
-        *   `export_class_default` - Export class default objects (CDO) for inspection
-        *   `import_asset` - Import files to create or update UObjects
-        *   `query_asset` - Query single asset information from the asset registry
-        *   `search_assets` - Search for assets in package paths with optional class filtering
-    *   **Common Tools:**
-        *   `get_project_config` - Retrieve project and engine configuration information
-        *   `execute_console_command` - Execute Unreal Engine console commands (e.g., `stat fps`, `showdebug ai`)
+        *   `query_asset` - Query a single asset to check if it exists and get its basic information from the asset registry. Use this before export_asset or import_asset to verify an asset exists. Faster than export_asset for simple existence checks. Returns asset path, name, class, package path, and optionally tags.
+        *   `search_assets` - Search for assets by package paths or package names, optionally filtered by class. More flexible than search_blueprints as it works with all asset types. Use packagePaths to search directories, packageNames for exact package matches, and classPaths to filter by asset type. **WARNING:** Searching `/Game/` directory without class filters is extremely expensive and not allowed. Always provide at least one class filter when searching large directories.
+        *   `search_blueprints` - Search for Blueprint assets based on various criteria including name patterns, parent classes, and package paths. Use `name` searchType to find Blueprints by name pattern (e.g., `BP_Player*`), `parent_class` to find Blueprints that inherit from a class (e.g., `Actor`, `Pawn`, `Character`), or `all` for comprehensive search.
+        *   `export_asset` - Export a single UObject to a specified format (defaults to T3D). Exportable asset types include: StaticMesh, Texture2D, Material, Sound, Animation, and most UObject-derived classes. T3D format provides human-readable text representation. **IMPORTANT:** This tool will fail if used with Blueprint assets. Blueprints must be exported using batch_export_assets instead.
+        *   `batch_export_assets` - Export multiple assets to files in a specified folder. Required for Blueprint assets, as export_asset will fail for Blueprints due to response size limitations. Use this for Blueprints or when exporting multiple assets. Files are saved to disk at the specified output folder path. Format defaults to T3D. Each asset is exported to a separate file named after the asset. **For Blueprint graph inspection**: Use `format="md"` (markdown) when exporting Blueprint assets. The markdown export provides complete Blueprint graph information including nodes, variables, functions, and events. After export, agents should read the markdown file using standard file system tools, then parse and optionally flatten the markdown to understand the graph structure. The MCP cannot perform the simplification/flattening step - this must be done by the agent.
+        *   `export_class_default` - Export the class default object (CDO) for a given class path. This allows determining default values for a class, since exporting instances of objects do not print values that are identical to the default value. Use this to understand default property values for Unreal classes. Useful for comparing instance values against defaults.
+        *   `import_asset` - Import a file to create or update a UObject. The file type is automatically detected based on available factories. Supported binary formats: `.fbx`, `.obj` (meshes), `.png`, `.jpg`, `.tga` (textures), `.wav`, `.mp3` (sounds). T3D files can be used to import from T3D format or to configure imported objects. If asset exists at packagePath, it will be updated. Otherwise, a new asset is created.
+        *   `get_asset_dependencies` - Get all assets that a specified asset depends on. Returns an array of asset paths that the specified asset depends on. Use this to understand what assets an asset requires, which is useful for impact analysis, refactoring safety, and understanding asset relationships. Very useful when doing asset searches and queries with existing tools. Supports both hard dependencies (direct references) and soft dependencies (searchable references).
+        *   `get_asset_references` - Get all assets that reference a specified asset. Returns an array of asset paths that reference the specified asset. Use this to understand what assets depend on this asset, which is critical for impact analysis, refactoring safety, and unused asset detection. Very useful when doing asset searches and queries with existing tools. Supports both hard references (direct references) and soft references (searchable references).
+        *   `get_asset_dependency_tree` - Get the complete dependency tree for a specified asset. Returns a recursive tree structure showing all dependencies and their dependencies. Use this for complete dependency mapping and recursive analysis. The tree includes depth information for each node. Very useful when doing asset searches and queries with existing tools. Supports both hard dependencies (direct references) and soft dependencies (searchable references). Use maxDepth to limit recursion depth and prevent infinite loops.
 *   **Resources:** URI template-based resource system for accessing Unreal Engine assets:
     *   Blueprint T3D exporter via `unreal+t3d://{filepath}` URI scheme
 *   **Prompts:** Framework for templated prompt interactions (ready for use, no prompts currently registered)
@@ -101,6 +108,15 @@ This plugin allows external applications, particularly AI agents, to query and m
 
 4.  **Receiving Responses:** The server responds with JSON-RPC 2.0 formatted responses.
 
+5.  **Tool Usage Tips:**
+    *   **Start with `get_project_config`** to understand the project structure and get directory paths
+    *   **Use `query_asset`** before `export_asset` or `import_asset` to verify assets exist
+    *   **For Blueprints**, always use `batch_export_assets` instead of `export_asset` (which will fail)
+    *   **For Blueprint graph inspection**: Use `batch_export_assets` with `format="md"` (markdown) to export Blueprint assets. The markdown export provides complete graph information. After export, read the markdown file using standard file system tools, then parse and optionally flatten it to understand the graph structure. The MCP cannot perform simplification - agents must handle parsing/flattening.
+    *   **When searching assets**, always provide class filters when searching large directories like `/Game/` to avoid expensive operations
+    *   **For console commands**, check the Unreal Engine output log for command output, as some commands only produce visual output
+    *   **For file paths**, use absolute paths or paths relative to the project directory
+
 5.  **T3D Format Specification:**
     *   When working with T3D (Unreal Text File) format files for asset export, import, or analysis, it is recommended that your project rules reference the T3D format specification document.
     *   This helps AI agents and developers understand the T3D file structure, syntax, and parsing guidelines.
@@ -110,10 +126,15 @@ This plugin allows external applications, particularly AI agents, to query and m
 
 *   **Core Server:** `FUMCP_Server` - Main server class handling HTTP requests and JSON-RPC routing
 *   **Tools:** 
-    *   `FUMCP_CommonTools` - Registers and implements general-purpose MCP tools (project config, console commands)
-    *   `FUMCP_AssetTools` - Registers and implements asset-related MCP tools (search, export, import, query)
+    *   `FUMCP_CommonTools` - Registers and implements general-purpose MCP tools (project config, console commands, editor compilation)
+    *   `FUMCP_AssetTools` - Registers and implements asset-related MCP tools (search, export, import, query, dependency analysis)
+    *   `FUMCP_BlueprintTools` - Registers and implements Blueprint-specific MCP tools (search, markdown export)
 *   **Resources:** `FUMCP_CommonResources` - Registers and implements common MCP resources
-*   **Types:** `UMCP_Types.h` - All MCP data structures defined as USTRUCTs
+*   **Types:** 
+    *   `UMCP_Types.h` - Core MCP protocol data structures (JSON-RPC, Initialize, ToolDefinition, etc.)
+    *   `UMCP_AssetTools.h` - Asset tool parameter and result types
+    *   `UMCP_CommonTools.h` - Common tool parameter and result types
+    *   `UMCP_BlueprintTools.h` - Blueprint tool parameter and result types
 *   **HTTP Transport:** Uses Unreal Engine's `FHttpServerModule` for HTTP handling
 
 ## Repository Structure
@@ -121,10 +142,11 @@ This plugin allows external applications, particularly AI agents, to query and m
 *   `Source/`: Contains the C++ source code for the plugin.
     *   `UnrealMCPServer/Public/`: Public header files
         *   `UMCP_Server.h` - Main server class
-        *   `UMCP_CommonTools.h` - General-purpose tools
-        *   `UMCP_AssetTools.h` - Asset-related tools
+        *   `UMCP_CommonTools.h` - General-purpose tools and their parameter/result types
+        *   `UMCP_AssetTools.h` - Asset-related tools and their parameter/result types
+        *   `UMCP_BlueprintTools.h` - Blueprint-specific tools and their parameter/result types
         *   `UMCP_CommonResources.h` - Resource definitions
-        *   `UMCP_Types.h` - MCP data structures
+        *   `UMCP_Types.h` - Core MCP protocol data structures (JSON-RPC, Initialize, ToolDefinition, etc.)
     *   `UnrealMCPServer/Private/`: Implementation files
         *   `UMCP_Server.cpp` - Server implementation
         *   `UMCP_CommonTools.cpp` - Common tools implementation

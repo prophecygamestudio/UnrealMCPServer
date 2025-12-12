@@ -42,7 +42,9 @@ public class UnrealMCPServer : ModuleRules
 				"HTTP",
 				"AssetRegistry", // For Blueprint search functionality
 				"BlueprintGraph", // For Blueprint graph analysis
-				"AssetTools" // For UFactory and asset import functionality
+				"AssetTools", // For UFactory and asset import functionality
+				"Projects", // For IPluginManager to check plugin availability
+				"LiveCoding" // For ILiveCodingModule to trigger compilations
 				// ... add private dependencies that you statically link with here ...	
 			}
 			);

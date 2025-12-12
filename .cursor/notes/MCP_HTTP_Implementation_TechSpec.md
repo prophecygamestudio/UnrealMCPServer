@@ -22,8 +22,9 @@ The MCP Server is implemented as part of an Unreal Engine plugin (`UnrealMCPServ
 *   **Lifecycle Management:** The server starts automatically when the plugin module loads and shuts down gracefully when the module unloads or the engine exits.
 *   **Core Classes:**
     *   `FUMCP_Server`: Main server class handling HTTP requests and JSON-RPC routing
-    *   `FUMCP_CommonTools`: Registers and implements general-purpose MCP tools (project config, console commands)
-    *   `FUMCP_AssetTools`: Registers and implements asset-related MCP tools (search, export, import, query)
+    *   `FUMCP_CommonTools`: Registers and implements general-purpose MCP tools (project config, console commands, editor compilation)
+    *   `FUMCP_AssetTools`: Registers and implements asset-related MCP tools (search, export, import, query, dependency analysis)
+    *   `FUMCP_BlueprintTools`: Registers and implements Blueprint-specific MCP tools (search, markdown export)
     *   `FUMCP_CommonResources`: Registers and implements common MCP resources
 
 ### 2.2. HTTP Server Implementation
@@ -228,13 +229,23 @@ USTRUCTs are defined for all MCP data types (ToolDefinition, Resource, Prompt, e
 ## 6. Data Structures and Schema Adherence (UE C++)
 
 *   **Source of Truth:** The official MCP JSON schema (version "2024-11-05" - server uses this protocol version).
-*   **USTRUCTs:** All JSON objects defined in the MCP schema have corresponding USTRUCTs in `UMCP_Types.h`:
-    *   JSON-RPC: `FUMCP_JsonRpcRequest`, `FUMCP_JsonRpcResponse`, `FUMCP_JsonRpcError`, `FUMCP_JsonRpcId`
-    *   MCP Core: `FUMCP_ServerInfo`, `FUMCP_ServerCapabilities`, `FUMCP_InitializeParams`, `FUMCP_InitializeResult`
-    *   Tools: `FUMCP_ToolDefinition`, `FUMCP_CallToolParams`, `FUMCP_CallToolResult`, `FUMCP_CallToolResultContent`
-    *   Resources: `FUMCP_ResourceDefinition`, `FUMCP_ResourceTemplateDefinition`, `FUMCP_ReadResourceParams`, `FUMCP_ReadResourceResult`
-    *   Prompts: `FUMCP_PromptDefinition`, `FUMCP_PromptDefinitionInternal`, `FUMCP_GetPromptParams`, `FUMCP_GetPromptResult`, `FUMCP_PromptMessage`, `FUMCP_PromptContent`
-    *   Tool Parameters: `FUMCP_SearchBlueprintsParams`, `FUMCP_ExportAssetParams`, `FUMCP_ImportAssetParams`, etc.
+*   **USTRUCTs:** JSON objects defined in the MCP schema have corresponding USTRUCTs organized by domain:
+    *   **Core MCP Protocol Types** (`UMCP_Types.h`):
+        *   JSON-RPC: `FUMCP_JsonRpcRequest`, `FUMCP_JsonRpcResponse`, `FUMCP_JsonRpcError`, `FUMCP_JsonRpcId`
+        *   MCP Core: `FUMCP_ServerInfo`, `FUMCP_ServerCapabilities`, `FUMCP_InitializeParams`, `FUMCP_InitializeResult`
+        *   Tools: `FUMCP_ToolDefinition`, `FUMCP_CallToolParams`, `FUMCP_CallToolResult`, `FUMCP_CallToolResultContent`
+        *   Resources: `FUMCP_ResourceDefinition`, `FUMCP_ResourceTemplateDefinition`, `FUMCP_ReadResourceParams`, `FUMCP_ReadResourceResult`
+        *   Prompts: `FUMCP_PromptDefinition`, `FUMCP_PromptDefinitionInternal`, `FUMCP_GetPromptParams`, `FUMCP_GetPromptResult`, `FUMCP_PromptMessage`, `FUMCP_PromptContent`
+    *   **Asset Tool Types** (`UMCP_AssetTools.h`):
+        *   `FUMCP_ExportAssetParams/Result`, `FUMCP_BatchExportAssetsParams/Result`, `FUMCP_ExportClassDefaultParams/Result`
+        *   `FUMCP_ImportAssetParams/Result`, `FUMCP_QueryAssetParams/Result`, `FUMCP_SearchAssetsParams`
+        *   `FUMCP_GetAssetDependenciesParams/Result`, `FUMCP_GetAssetReferencesParams/Result`, `FUMCP_GetAssetDependencyTreeParams/Result`, `FUMCP_AssetDependencyNode`
+    *   **Common Tool Types** (`UMCP_CommonTools.h`):
+        *   `FUMCP_GetProjectConfigParams/Result`, `FUMCP_EngineVersionInfo`, `FUMCP_ProjectPaths`
+        *   `FUMCP_ExecuteConsoleCommandParams/Result`, `FUMCP_GetLogFilePathParams/Result`
+        *   `FUMCP_RequestEditorCompileParams/Result`
+    *   **Blueprint Tool Types** (`UMCP_BlueprintTools.h`):
+        *   `FUMCP_SearchBlueprintsParams`, `FUMCP_ExportBlueprintMarkdownParams/Result`
 *   **JSON Serialization:**
     *   `FJsonObjectConverter` is used for serialization/deserialization between JSON and USTRUCTs.
     *   Helper functions: `UMCP_ToJsonObject()`, `UMCP_ToJsonString()`, `UMCP_CreateFromJsonObject()` provide type-safe JSON conversion.

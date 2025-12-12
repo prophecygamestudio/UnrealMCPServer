@@ -6,6 +6,7 @@
 #include "UObject/UnrealType.h"
 #include "Exporters/Exporter.h"
 #include "AssetRegistry/AssetRegistryModule.h"
+#include "AssetRegistry/IAssetRegistry.h"
 #include "Engine/Blueprint.h"
 #include "K2Node.h"
 #include "UObject/UObjectGlobals.h"
@@ -22,24 +23,11 @@
 #include "Engine/Engine.h"
 #include "Misc/ScopeExit.h"
 #include "Internationalization/Text.h"
+#include "Interfaces/IPluginManager.h"
 
 
 namespace
 {
-	TSharedPtr<FJsonObject> FromJsonStr(const FString& Str)
-	{
-		TSharedPtr<FJsonObject> RootJsonObject;
-		TSharedRef<TJsonReader<>> Reader = TJsonReaderFactory<>::Create(Str);
-
-		if (!FJsonSerializer::Deserialize(Reader, RootJsonObject) || !RootJsonObject.IsValid())
-		{
-			UE_LOG(LogTemp, Error, TEXT("FJsonRpcRequest::CreateFromJsonString: Failed to deserialize JsonString. String: %s"), *Str);
-			return nullptr;
-		}
-
-		return RootJsonObject;
-	}
-
 	// Helper function to convert FAssetData to JSON
 	void AssetDataToJson(const FAssetData& AssetData, TSharedPtr<FJsonObject> OutJson, bool bIncludeTags)
 	{
@@ -82,82 +70,54 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 {
 	{
 		FUMCP_ToolDefinition Tool;
-		Tool.name = TEXT("search_blueprints");
-		Tool.description = TEXT("Search for Blueprint assets based on various criteria including name patterns, parent classes, and package paths.");
-		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::SearchBlueprints);
-		
-		// Generate input schema from USTRUCT with descriptions and enum
-		TMap<FString, FString> InputDescriptions;
-		InputDescriptions.Add(TEXT("searchType"), TEXT("Type of search to perform: 'name' for name pattern matching, 'parent_class' for finding Blueprint subclasses, 'all' for comprehensive search"));
-		InputDescriptions.Add(TEXT("searchTerm"), TEXT("Search term (Blueprint name pattern, parent class name, etc.)."));
-		InputDescriptions.Add(TEXT("packagePath"), TEXT("Optional package path to limit search scope (e.g., '/Game/Blueprints'). If not specified, searches entire project."));
-		InputDescriptions.Add(TEXT("recursive"), TEXT("Whether to search recursively in subfolders. Defaults to true."));
-		TArray<FString> InputRequired;
-		InputRequired.Add(TEXT("searchType"));
-		InputRequired.Add(TEXT("searchTerm"));
-		TMap<FString, TArray<FString>> EnumValues;
-		EnumValues.Add(TEXT("searchType"), { TEXT("name"), TEXT("parent_class"), TEXT("all") });
-		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_SearchBlueprintsParams::StaticStruct(), InputDescriptions, InputRequired, EnumValues);
-		
-		// Output schema is complex with nested objects, so we'll keep it as manual JSON for now
-		// TODO: Could create USTRUCT for output and generate schema, but nested match objects are complex
-		FString SearchOutputSchema = TEXT("{")
-			TEXT("\"type\":\"object\",")
-			TEXT("\"properties\":{")
-			TEXT("\"results\":{\"type\":\"array\",\"description\":\"Array of matching Blueprint assets\",\"items\":{\"type\":\"object\",\"properties\":{")
-			TEXT("\"assetPath\":{\"type\":\"string\"},")
-			TEXT("\"assetName\":{\"type\":\"string\"},")
-			TEXT("\"packagePath\":{\"type\":\"string\"},")
-			TEXT("\"parentClass\":{\"type\":\"string\"},")
-			TEXT("\"matches\":{\"type\":\"array\",\"items\":{\"type\":\"object\"}}")
-			TEXT("}}},")
-			TEXT("\"totalResults\":{\"type\":\"number\",\"description\":\"Total number of matching results\"},")
-			TEXT("\"searchCriteria\":{\"type\":\"object\",\"description\":\"The search criteria used\",\"properties\":{")
-			TEXT("\"searchType\":{\"type\":\"string\"},")
-			TEXT("\"searchTerm\":{\"type\":\"string\"},")
-			TEXT("\"packagePath\":{\"type\":\"string\",\"description\":\"Optional package path if specified\"},")
-			TEXT("\"recursive\":{\"type\":\"boolean\"}")
-			TEXT("},\"required\":[\"searchType\",\"searchTerm\",\"recursive\"]")
-			TEXT("}},")
-			TEXT("\"required\":[\"results\",\"totalResults\",\"searchCriteria\"]")
-			TEXT("}");
-		TSharedPtr<FJsonObject> ParsedSchema = FromJsonStr(SearchOutputSchema);
-		if (ParsedSchema.IsValid())
-		{
-			Tool.outputSchema = ParsedSchema;
-		}
-		else
-		{
-			UE_LOG(LogUnrealMCPServer, Error, TEXT("Failed to parse outputSchema for search_blueprints tool"));
-		}
-		Server->RegisterTool(MoveTemp(Tool));
-	}
-	
-	{
-		FUMCP_ToolDefinition Tool;
 		Tool.name = TEXT("export_asset");
-		Tool.description = TEXT("Export a single UObject to a specified format (defaults to T3D). Returns the exported content as a string.");
+		
+		// Check if BP2AI plugin is available for markdown export support
+		TSharedPtr<IPlugin> BP2AIPlugin = IPluginManager::Get().FindPlugin(TEXT("BP2AI"));
+		bool bBP2AIAvailable = BP2AIPlugin.IsValid() && BP2AIPlugin->IsEnabled();
+		
+		// Build description based on plugin availability
+		FString Description = TEXT("Export a single UObject to a specified format (defaults to T3D). Exportable asset types include: StaticMesh, Texture2D, Material, Sound, Animation, and most UObject-derived classes. Returns the exported content as a string. T3D format provides human-readable text representation of Unreal objects. ");
+		if (bBP2AIAvailable)
+		{
+			Description += TEXT("Markdown format provides structured documentation of asset properties. ");
+		}
+		Description += TEXT("IMPORTANT: This tool will fail if used with Blueprint assets. Blueprints must be exported using batch_export_assets instead, as Blueprint exports generate responses too large to be parsed. For large exports, consider using batch_export_assets which saves to files.");
+		Tool.description = Description;
+		
 		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::ExportAsset);
 		
 		// Generate input schema from USTRUCT with descriptions
 		TMap<FString, FString> InputDescriptions;
-		InputDescriptions.Add(TEXT("objectPath"), TEXT("The path to the object to export"));
-		InputDescriptions.Add(TEXT("format"), TEXT("The export format (e.g., 'T3D'). Defaults to 'T3D' if not specified."));
+		InputDescriptions.Add(TEXT("objectPath"), TEXT("The Unreal Engine object path to export. Format: '/Game/Folder/AssetName' or '/Game/Folder/AssetName.AssetName'. Examples: '/Game/MyAsset', '/Game/Textures/MyTexture.MyTexture', '/Engine/EditorMaterials/GridMaterial'. Blueprint assets are not supported and will fail. Use batch_export_assets for Blueprint assets. Use query_asset first to verify the asset exists."));
+		FString FormatDescription = TEXT("The export format. 'T3D': Human-readable text representation (default). ");
+		if (bBP2AIAvailable)
+		{
+			FormatDescription += TEXT("'md': Structured markdown documentation. ");
+		}
+		FormatDescription += TEXT("Defaults to 'T3D' if not specified. Other formats may be available depending on the asset type (e.g., 'OBJ' for meshes).");
+		InputDescriptions.Add(TEXT("format"), FormatDescription);
 		TArray<FString> InputRequired;
 		InputRequired.Add(TEXT("objectPath"));
-		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_ExportAssetParams::StaticStruct(), InputDescriptions, InputRequired);
+		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_ExportAssetParams>(InputDescriptions, InputRequired);
 		
 		// Generate output schema from USTRUCT with descriptions
 		TMap<FString, FString> OutputDescriptions;
 		OutputDescriptions.Add(TEXT("bSuccess"), TEXT("Whether the export was successful"));
 		OutputDescriptions.Add(TEXT("objectPath"), TEXT("The path to the object that was exported"));
-		OutputDescriptions.Add(TEXT("format"), TEXT("The export format used (e.g., 'T3D', 'OBJ')"));
+		FString OutputFormatDescription = TEXT("The export format used (e.g., 'T3D'");
+		if (bBP2AIAvailable)
+		{
+			OutputFormatDescription += TEXT(", 'md'");
+		}
+		OutputFormatDescription += TEXT(", 'OBJ')");
+		OutputDescriptions.Add(TEXT("format"), OutputFormatDescription);
 		OutputDescriptions.Add(TEXT("content"), TEXT("The exported asset content in the specified format. The format varies depending on the exporter type and object type."));
 		OutputDescriptions.Add(TEXT("error"), TEXT("Error message if bSuccess is false"));
 		TArray<FString> OutputRequired;
 		OutputRequired.Add(TEXT("bSuccess"));
 		OutputRequired.Add(TEXT("objectPath"));
-		TSharedPtr<FJsonObject> ExportOutputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_ExportAssetResult::StaticStruct(), OutputDescriptions, OutputRequired);
+		TSharedPtr<FJsonObject> ExportOutputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_ExportAssetResult>(OutputDescriptions, OutputRequired);
 		if (ExportOutputSchema.IsValid())
 		{
 			Tool.outputSchema = ExportOutputSchema;
@@ -172,18 +132,32 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 	{
 		FUMCP_ToolDefinition Tool;
 		Tool.name = TEXT("batch_export_assets");
-		Tool.description = TEXT("Export multiple assets to files in a specified folder. Returns a list of the exported file paths.");
+		
+		// Check if BP2AI plugin is available for markdown export support
+		TSharedPtr<IPlugin> BP2AIPlugin = IPluginManager::Get().FindPlugin(TEXT("BP2AI"));
+		bool bBP2AIAvailable = BP2AIPlugin.IsValid() && BP2AIPlugin->IsEnabled();
+		
+		// Build description based on plugin availability
+		FString Description = TEXT("Export multiple assets to files in a specified folder. Returns a list of the exported file paths. Required for Blueprint assets, as export_asset will fail for Blueprints due to response size limitations. Use this when exporting multiple assets of any type. Files are saved to disk at the specified output folder path. Format defaults to T3D. Each asset is exported to a separate file named after the asset. Returns array of successfully exported file paths. Failed exports are not included in the return value. ");
+		Description += TEXT("NOTE: For Blueprint graph inspection, use export_blueprint_markdown instead, which is specifically designed for that purpose and provides clearer workflow guidance.");
+		Tool.description = Description;
 		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::BatchExportAssets);
 		
 		// Generate input schema from USTRUCT with descriptions
 		TMap<FString, FString> InputDescriptions;
-		InputDescriptions.Add(TEXT("objectPaths"), TEXT("Array of object paths to export"));
-		InputDescriptions.Add(TEXT("outputFolder"), TEXT("The folder path where exported files should be saved"));
-		InputDescriptions.Add(TEXT("format"), TEXT("The export format (e.g., 'T3D'). Defaults to 'T3D' if not specified."));
+		InputDescriptions.Add(TEXT("objectPaths"), TEXT("Array of Unreal Engine object paths to export. Each path should be in format '/Game/Folder/AssetName' or '/Game/Folder/AssetName.AssetName'. Examples: ['/Game/MyAsset', '/Game/Blueprints/BP_Player.BP_Player']. Can include Blueprint assets (unlike export_asset)."));
+		InputDescriptions.Add(TEXT("outputFolder"), TEXT("The absolute or relative folder path where exported files should be saved. Examples: 'C:/Exports/Blueprints', './Exports', '/tmp/exports'. The folder will be created if it doesn't exist. Each asset is exported to a separate file named after the asset (e.g., 'BP_Player.T3D', 'MyTexture.T3D', 'BP_Player.md' for markdown format)."));
+		FString FormatDescription = TEXT("The export format. Defaults to 'T3D' if not specified. Examples: 'T3D' (human-readable text), 'OBJ' (for meshes). ");
+		if (bBP2AIAvailable)
+		{
+			FormatDescription += TEXT("'md' (markdown): Available for assets that support markdown export. ");
+		}
+		FormatDescription += TEXT("Format must be supported by the exporter for each asset type. NOTE: For Blueprint markdown export, use export_blueprint_markdown instead.");
+		InputDescriptions.Add(TEXT("format"), FormatDescription);
 		TArray<FString> InputRequired;
 		InputRequired.Add(TEXT("objectPaths"));
 		InputRequired.Add(TEXT("outputFolder"));
-		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_BatchExportAssetsParams::StaticStruct(), InputDescriptions, InputRequired);
+		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_BatchExportAssetsParams>(InputDescriptions, InputRequired);
 		
 		// Generate output schema from USTRUCT with descriptions
 		TMap<FString, FString> OutputDescriptions;
@@ -197,7 +171,7 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 		OutputRequired.Add(TEXT("bSuccess"));
 		OutputRequired.Add(TEXT("exportedCount"));
 		OutputRequired.Add(TEXT("failedCount"));
-		TSharedPtr<FJsonObject> BatchExportOutputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_BatchExportAssetsResult::StaticStruct(), OutputDescriptions, OutputRequired);
+		TSharedPtr<FJsonObject> BatchExportOutputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_BatchExportAssetsResult>(OutputDescriptions, OutputRequired);
 		if (BatchExportOutputSchema.IsValid())
 		{
 			Tool.outputSchema = BatchExportOutputSchema;
@@ -212,16 +186,16 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 	{
 		FUMCP_ToolDefinition Tool;
 		Tool.name = TEXT("export_class_default");
-		Tool.description = TEXT("Export the class default object for a given class path. This allows determining default values for a class, since exporting instances of objects do not print values that are identical to the default value.");
+		Tool.description = TEXT("Export the class default object (CDO) for a given class path. This allows determining default values for a class, since exporting instances of objects do not print values that are identical to the default value. Use this to understand default property values for Unreal classes. Useful for comparing instance values against defaults. Returns T3D format by default, showing all default property values for the class.");
 		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::ExportClassDefault);
 		
 		// Generate input schema from USTRUCT with descriptions
 		TMap<FString, FString> InputDescriptions;
-		InputDescriptions.Add(TEXT("classPath"), TEXT("The class path to export the default object for (e.g., '/Script/Engine.Actor')"));
-		InputDescriptions.Add(TEXT("format"), TEXT("The export format (e.g., 'T3D'). Defaults to 'T3D' if not specified."));
+		InputDescriptions.Add(TEXT("classPath"), TEXT("The class path to export the default object for. C++ class format: '/Script/Engine.Actor', '/Script/Engine.Pawn', '/Script/Engine.Character'. Blueprint class format: '/Game/Blueprints/BP_Player.BP_Player_C' (note the '_C' suffix for Blueprint classes). Examples: '/Script/Engine.Actor', '/Script/Engine.Texture2D', '/Game/Blueprints/BP_Enemy.BP_Enemy_C'."));
+		InputDescriptions.Add(TEXT("format"), TEXT("The export format. Defaults to 'T3D' if not specified. 'T3D' provides human-readable text showing all default property values. Other formats may be available depending on the class type."));
 		TArray<FString> InputRequired;
 		InputRequired.Add(TEXT("classPath"));
-		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_ExportClassDefaultParams::StaticStruct(), InputDescriptions, InputRequired);
+		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_ExportClassDefaultParams>(InputDescriptions, InputRequired);
 		
 		// Generate output schema from USTRUCT with descriptions
 		TMap<FString, FString> OutputDescriptions;
@@ -233,7 +207,7 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 		TArray<FString> OutputRequired;
 		OutputRequired.Add(TEXT("bSuccess"));
 		OutputRequired.Add(TEXT("classPath"));
-		TSharedPtr<FJsonObject> ExportClassDefaultOutputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_ExportClassDefaultResult::StaticStruct(), OutputDescriptions, OutputRequired);
+		TSharedPtr<FJsonObject> ExportClassDefaultOutputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_ExportClassDefaultResult>(OutputDescriptions, OutputRequired);
 		if (ExportClassDefaultOutputSchema.IsValid())
 		{
 			Tool.outputSchema = ExportClassDefaultOutputSchema;
@@ -248,19 +222,19 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 	{
 		FUMCP_ToolDefinition Tool;
 		Tool.name = TEXT("import_asset");
-		Tool.description = TEXT("Import a file to create or update a UObject. The file type is automatically detected based on available factories.");
+		Tool.description = TEXT("Import a file to create or update a UObject. The file type is automatically detected based on available factories. Import binary files (textures, meshes, sounds) or T3D files to create/update Unreal assets. Supported binary formats: .fbx, .obj (meshes), .png, .jpg, .tga (textures), .wav, .mp3 (sounds). T3D files can be used to import from T3D format or to configure imported objects. If asset exists at packagePath, it will be updated. Otherwise, a new asset is created. At least one of filePath (binary) or t3dFilePath (T3D) must be provided.");
 		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::ImportAsset);
 		
 		// Generate input schema from USTRUCT with descriptions
 		TMap<FString, FString> InputDescriptions;
-		InputDescriptions.Add(TEXT("filePath"), TEXT("The path to the binary file to import (e.g., texture, mesh). Optional if t3dFilePath is provided. At least one of filePath or t3dFilePath must be specified."));
-		InputDescriptions.Add(TEXT("t3dFilePath"), TEXT("The path to the T3D file for configuration. Optional if filePath is provided. At least one of filePath or t3dFilePath must be specified."));
-		InputDescriptions.Add(TEXT("packagePath"), TEXT("The full object path where the object should be created, including the object name (e.g., '/Game/MyFolder/MyAsset.MyAsset')"));
-		InputDescriptions.Add(TEXT("classPath"), TEXT("The class path of the object to import (e.g., '/Script/Engine.Texture2D')"));
+		InputDescriptions.Add(TEXT("filePath"), TEXT("The absolute or relative path to the binary file to import. Supported formats: .fbx, .obj (meshes), .png, .jpg, .tga (textures), .wav, .mp3 (sounds). Examples: 'C:/Models/MyMesh.fbx', './Textures/MyTexture.png'. Optional if t3dFilePath is provided. At least one of filePath or t3dFilePath must be specified."));
+		InputDescriptions.Add(TEXT("t3dFilePath"), TEXT("The absolute or relative path to the T3D file for configuration. T3D files can be used to import from T3D format or to configure imported objects. Examples: 'C:/Exports/MyAsset.T3D', './Config/MyAsset.T3D'. Optional if filePath is provided. At least one of filePath or t3dFilePath must be specified."));
+		InputDescriptions.Add(TEXT("packagePath"), TEXT("The full object path where the object should be created, including the object name. Format: '/Game/MyFolder/MyAsset.MyAsset' (include object name after the dot). Examples: '/Game/MyAsset.MyAsset', '/Game/Textures/MyTexture.MyTexture', '/Game/Meshes/MyMesh.MyMesh'. If asset exists at this path, it will be updated. Otherwise, a new asset is created."));
+		InputDescriptions.Add(TEXT("classPath"), TEXT("The class path of the object to import. C++ class format: '/Script/Engine.Texture2D', '/Script/Engine.StaticMesh', '/Script/Engine.SoundWave'. Blueprint class format: '/Game/Blueprints/BP_Player.BP_Player_C'. Examples: '/Script/Engine.Texture2D' (for textures), '/Script/Engine.StaticMesh' (for meshes), '/Script/Engine.SoundWave' (for sounds)."));
 		TArray<FString> InputRequired;
 		InputRequired.Add(TEXT("packagePath"));
 		InputRequired.Add(TEXT("classPath"));
-		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_ImportAssetParams::StaticStruct(), InputDescriptions, InputRequired);
+		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_ImportAssetParams>(InputDescriptions, InputRequired);
 		
 		// Generate output schema from USTRUCT with descriptions
 		TMap<FString, FString> OutputDescriptions;
@@ -273,7 +247,7 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 		OutputDescriptions.Add(TEXT("error"), TEXT("Error message if bSuccess is false"));
 		TArray<FString> OutputRequired;
 		OutputRequired.Add(TEXT("bSuccess"));
-		TSharedPtr<FJsonObject> ImportOutputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_ImportAssetResult::StaticStruct(), OutputDescriptions, OutputRequired);
+		TSharedPtr<FJsonObject> ImportOutputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_ImportAssetResult>(OutputDescriptions, OutputRequired);
 		if (ImportOutputSchema.IsValid())
 		{
 			Tool.outputSchema = ImportOutputSchema;
@@ -288,16 +262,16 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 	{
 		FUMCP_ToolDefinition Tool;
 		Tool.name = TEXT("query_asset");
-		Tool.description = TEXT("Query a single asset to check if it exists and get its basic information from the asset registry.");
+		Tool.description = TEXT("Query a single asset to check if it exists and get its basic information from the asset registry. Use this before export_asset or import_asset to verify an asset exists. Faster than export_asset for simple existence checks. Returns asset path, name, class, package path, and optionally tags. Returns error if asset doesn't exist.");
 		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::QueryAsset);
 		
 		// Generate input schema from USTRUCT with descriptions
 		TMap<FString, FString> InputDescriptions;
-		InputDescriptions.Add(TEXT("assetPath"), TEXT("Single asset path to query (e.g., '/Game/MyAsset' or '/Game/MyFolder/MyAsset')"));
-		InputDescriptions.Add(TEXT("bIncludeTags"), TEXT("Whether to include asset tags in the response. Defaults to false."));
+		InputDescriptions.Add(TEXT("assetPath"), TEXT("Single asset path to query. Format: '/Game/MyAsset' or '/Game/MyFolder/MyAsset' or '/Game/MyFolder/MyAsset.MyAsset'. Examples: '/Game/MyAsset', '/Game/Blueprints/BP_Player', '/Engine/EditorMaterials/GridMaterial'. Must start with '/Game/' or '/Engine/'. Asset must exist in the project."));
+		InputDescriptions.Add(TEXT("bIncludeTags"), TEXT("Whether to include asset tags in the response. Defaults to false. Set to true to get additional metadata tags associated with the asset (e.g., 'ParentClass' for Blueprints, 'TextureGroup' for textures)."));
 		TArray<FString> InputRequired;
 		InputRequired.Add(TEXT("assetPath"));
-		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_QueryAssetParams::StaticStruct(), InputDescriptions, InputRequired);
+		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_QueryAssetParams>(InputDescriptions, InputRequired);
 		
 		// Generate output schema from USTRUCT with descriptions
 		TMap<FString, FString> OutputDescriptions;
@@ -311,7 +285,7 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 		TArray<FString> OutputRequired;
 		OutputRequired.Add(TEXT("bExists"));
 		OutputRequired.Add(TEXT("assetPath"));
-		TSharedPtr<FJsonObject> QueryOutputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_QueryAssetResult::StaticStruct(), OutputDescriptions, OutputRequired);
+		TSharedPtr<FJsonObject> QueryOutputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_QueryAssetResult>(OutputDescriptions, OutputRequired);
 		if (QueryOutputSchema.IsValid())
 		{
 			Tool.outputSchema = QueryOutputSchema;
@@ -326,19 +300,19 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 	{
 		FUMCP_ToolDefinition Tool;
 		Tool.name = TEXT("search_assets");
-		Tool.description = TEXT("Search for assets by package paths or package names, optionally filtered by class. Returns an array of asset information from the asset registry.");
+		Tool.description = TEXT("Search for assets by package paths or package names, optionally filtered by class. Returns an array of asset information from the asset registry. More flexible than search_blueprints as it works with all asset types. Use packagePaths to search directories (e.g., '/Game/Blueprints' searches all assets in that folder), packageNames for exact package matches, and classPaths to filter by asset type (e.g., textures only). Returns array of asset information. Use bIncludeTags=true to get additional metadata tags. WARNING: Searching '/Game/' directory without class filters is extremely expensive and not allowed. Always provide at least one class filter when searching large directories.");
 		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::SearchAssets);
 		
 		// Generate input schema from USTRUCT with descriptions
 		TMap<FString, FString> InputDescriptions;
-		InputDescriptions.Add(TEXT("packagePaths"), TEXT("Array of directory/package paths to search for assets (e.g., ['/Game/Blueprints', '/Game/Materials']). Optional if packageNames is provided."));
-		InputDescriptions.Add(TEXT("packageNames"), TEXT("Array of full package names to search for (e.g., ['MyAsset', '/Game/MyAsset']). Must be exact full package names - partial matches are not supported. Can be used instead of or in combination with packagePaths."));
-		InputDescriptions.Add(TEXT("classPaths"), TEXT("Array of class paths to filter by (e.g., ['/Script/Engine.Blueprint', '/Script/Engine.Texture2D']). If empty, searches all asset types."));
-		InputDescriptions.Add(TEXT("bRecursive"), TEXT("Whether to search recursively in subdirectories. Defaults to true."));
-		InputDescriptions.Add(TEXT("bIncludeTags"), TEXT("Whether to include asset tags in the response. Defaults to false."));
+		InputDescriptions.Add(TEXT("packagePaths"), TEXT("Array of directory/package paths to search for assets. Examples: ['/Game/Blueprints', '/Game/Materials', '/Game/Textures']. Uses Unreal's path format. Searches all assets in specified folders (recursive by default). Optional if packageNames is provided. WARNING: Searching '/Game/' without class filters is extremely expensive and blocked. Always provide classPaths when searching large directories."));
+		InputDescriptions.Add(TEXT("packageNames"), TEXT("Array of full package names to search for. Examples: ['MyAsset', '/Game/MyAsset', '/Game/Blueprints/BP_Player']. Must be exact full package names - partial matches are not supported. Can be used instead of or in combination with packagePaths. More targeted than packagePaths as it searches for specific packages."));
+		InputDescriptions.Add(TEXT("classPaths"), TEXT("Array of class paths to filter by. Examples: ['/Script/Engine.Blueprint', '/Script/Engine.Texture2D', '/Script/Engine.StaticMesh']. If empty, searches all asset types. C++ classes: '/Script/Engine.ClassName'. Blueprint classes: '/Game/Blueprints/BP_Player.BP_Player_C'. RECOMMENDED: Always provide at least one class filter when searching large directories like '/Game/' to avoid expensive operations."));
+		InputDescriptions.Add(TEXT("bRecursive"), TEXT("Whether to search recursively in subdirectories. Defaults to true. Set to false to search only the specified packagePaths directories without subdirectories."));
+		InputDescriptions.Add(TEXT("bIncludeTags"), TEXT("Whether to include asset tags in the response. Defaults to false. Set to true to get additional metadata tags for each asset (e.g., 'ParentClass' for Blueprints, 'TextureGroup' for textures, 'AssetImportData' for imported assets)."));
 		TArray<FString> InputRequired;
 		// packagePaths is required only if packageNames is empty
-		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct(FUMCP_SearchAssetsParams::StaticStruct(), InputDescriptions, InputRequired);
+		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_SearchAssetsParams>(InputDescriptions, InputRequired);
 		
 		// Output schema has complex nested asset objects, so we'll keep it as manual JSON for now
 		// TODO: Could create USTRUCT for output and generate schema
@@ -358,7 +332,7 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 			TEXT("},")
 			TEXT("\"required\":[\"assets\",\"count\"]")
 			TEXT("}");
-		TSharedPtr<FJsonObject> ParsedSchema = FromJsonStr(SearchAssetsOutputSchema);
+		TSharedPtr<FJsonObject> ParsedSchema = UMCP_FromJsonStr(SearchAssetsOutputSchema);
 		if (ParsedSchema.IsValid())
 		{
 			Tool.outputSchema = ParsedSchema;
@@ -369,148 +343,126 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 		}
 		Server->RegisterTool(MoveTemp(Tool));
 	}
-}
-
-bool FUMCP_AssetTools::SearchBlueprints(TSharedPtr<FJsonObject> arguments, TArray<FUMCP_CallToolResultContent>& OutContent)
-{
-	auto& Content = OutContent.Add_GetRef(FUMCP_CallToolResultContent());
-	Content.type = TEXT("text");
-
-	// Convert JSON to USTRUCT at the start
-	FUMCP_SearchBlueprintsParams Params;
-	if (!arguments.IsValid() || !UMCP_CreateFromJsonObject(arguments, Params))
-	{
-		Content.text = TEXT("Invalid parameters");
-		return false;
-	}
-
-	// Work with USTRUCT throughout
-	// Validate required parameters
-	if (Params.searchType.IsEmpty() || Params.searchTerm.IsEmpty())
-	{
-		Content.text = TEXT("Missing required parameters: searchType and searchTerm are required.");
-		return false;
-	}
-
-	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchBlueprints: Type=%s, Term=%s, Path=%s, Recursive=%s"), 
-		*Params.searchType, *Params.searchTerm, *Params.packagePath, Params.bRecursive ? TEXT("true") : TEXT("false"));
-
-	// Get Asset Registry
-	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
-	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
-
-	// Prepare search filter
-	FARFilter Filter;
-	Filter.ClassPaths.Add(UBlueprint::StaticClass()->GetClassPathName());
-	Filter.bRecursiveClasses = true;
 	
-	// Add package path filter if specified
-	if (!Params.packagePath.IsEmpty())
 	{
-		Filter.PackagePaths.Add(FName(*Params.packagePath));
-		Filter.bRecursivePaths = Params.bRecursive;
-	}
-
-	// Perform asset search
-	TArray<FAssetData> AssetDataList;
-	AssetRegistry.GetAssets(Filter, AssetDataList);
-
-	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchBlueprints: Found %d Blueprint assets before filtering"), AssetDataList.Num());
-
-	// Build results JSON
-	TSharedPtr<FJsonObject> ResultsJson = MakeShareable(new FJsonObject);
-	TArray<TSharedPtr<FJsonValue>> ResultsArray;
-	int32 TotalMatches = 0;
-
-	for (const FAssetData& AssetData : AssetDataList)
-	{
-		bool bMatches = false;
-		TArray<TSharedPtr<FJsonValue>> MatchesArray;
-
-		// Apply search type filters - using USTRUCT params
-		if (Params.searchType == TEXT("name") || Params.searchType == TEXT("all"))
+		FUMCP_ToolDefinition Tool;
+		Tool.name = TEXT("get_asset_dependencies");
+		Tool.description = TEXT("Get all assets that a specified asset depends on. Returns an array of asset paths that the specified asset depends on. Use this to understand what assets an asset requires, which is useful for impact analysis, refactoring safety, and understanding asset relationships. Very useful when doing asset searches and queries with existing tools. Supports both hard dependencies (direct references) and soft dependencies (searchable references).");
+		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::GetAssetDependencies);
+		
+		// Generate input schema from USTRUCT with descriptions
+		TMap<FString, FString> InputDescriptions;
+		InputDescriptions.Add(TEXT("assetPath"), TEXT("The asset path to get dependencies for. Format: '/Game/Folder/AssetName' or '/Game/Folder/AssetName.AssetName'. Examples: '/Game/MyAsset', '/Game/Blueprints/BP_Player', '/Engine/EditorMaterials/GridMaterial'. Must start with '/Game/' or '/Engine/'. Asset must exist in the project."));
+		InputDescriptions.Add(TEXT("bIncludeHardDependencies"), TEXT("Whether to include hard dependencies (direct references). Defaults to true. Hard dependencies are assets that are directly referenced by the asset."));
+		InputDescriptions.Add(TEXT("bIncludeSoftDependencies"), TEXT("Whether to include soft dependencies (searchable references). Defaults to false. Soft dependencies are assets that are referenced via searchable references (e.g., string-based asset references)."));
+		TArray<FString> InputRequired;
+		InputRequired.Add(TEXT("assetPath"));
+		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_GetAssetDependenciesParams>(InputDescriptions, InputRequired);
+		
+		// Generate output schema from USTRUCT with descriptions
+		TMap<FString, FString> OutputDescriptions;
+		OutputDescriptions.Add(TEXT("bSuccess"), TEXT("Whether the operation completed successfully"));
+		OutputDescriptions.Add(TEXT("assetPath"), TEXT("The asset path that was queried"));
+		OutputDescriptions.Add(TEXT("dependencies"), TEXT("Array of asset paths that this asset depends on"));
+		OutputDescriptions.Add(TEXT("count"), TEXT("Number of dependencies found"));
+		OutputDescriptions.Add(TEXT("error"), TEXT("Error message if bSuccess is false"));
+		TArray<FString> OutputRequired;
+		OutputRequired.Add(TEXT("bSuccess"));
+		OutputRequired.Add(TEXT("assetPath"));
+		OutputRequired.Add(TEXT("dependencies"));
+		OutputRequired.Add(TEXT("count"));
+		TSharedPtr<FJsonObject> GetAssetDependenciesOutputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_GetAssetDependenciesResult>(OutputDescriptions, OutputRequired);
+		if (GetAssetDependenciesOutputSchema.IsValid())
 		{
-			if (AssetData.AssetName.ToString().Contains(Params.searchTerm))
-			{
-				bMatches = true;
-				
-				// Add match detail
-				TSharedPtr<FJsonObject> MatchJson = MakeShareable(new FJsonObject);
-				MatchJson->SetStringField(TEXT("type"), TEXT("asset_name"));
-				MatchJson->SetStringField(TEXT("location"), TEXT("Blueprint Asset"));
-				MatchJson->SetStringField(TEXT("context"), FString::Printf(TEXT("Blueprint name '%s' contains '%s'"), 
-					*AssetData.AssetName.ToString(), *Params.searchTerm));
-				MatchesArray.Add(MakeShareable(new FJsonValueObject(MatchJson)));
-			}
+			Tool.outputSchema = GetAssetDependenciesOutputSchema;
 		}
-
-		if (Params.searchType == TEXT("parent_class") || Params.searchType == TEXT("all"))
+		else
 		{
-			// Get parent class information from asset tags
-			FString ParentClassPath;
-			if (AssetData.GetTagValue(TEXT("ParentClass"), ParentClassPath))
-			{
-				if (ParentClassPath.Contains(Params.searchTerm))
-				{
-					bMatches = true;
-					
-					// Add match detail
-					TSharedPtr<FJsonObject> MatchJson = MakeShareable(new FJsonObject);
-					MatchJson->SetStringField(TEXT("type"), TEXT("parent_class"));
-					MatchJson->SetStringField(TEXT("location"), TEXT("Blueprint Asset"));
-					MatchJson->SetStringField(TEXT("context"), FString::Printf(TEXT("Parent class '%s' contains '%s'"), 
-						*ParentClassPath, *Params.searchTerm));
-					MatchesArray.Add(MakeShareable(new FJsonValueObject(MatchJson)));
-				}
-			}
+			UE_LOG(LogUnrealMCPServer, Error, TEXT("Failed to generate outputSchema for get_asset_dependencies tool"));
 		}
-
-		// If this Blueprint matches, add it to results
-		if (bMatches)
-		{
-			TotalMatches++;
-			
-			TSharedPtr<FJsonObject> BlueprintResult = MakeShareable(new FJsonObject);
-			BlueprintResult->SetStringField(TEXT("assetPath"), AssetData.GetSoftObjectPath().ToString());
-			BlueprintResult->SetStringField(TEXT("assetName"), AssetData.AssetName.ToString());
-			BlueprintResult->SetStringField(TEXT("packagePath"), AssetData.PackagePath.ToString());
-			
-			// Get parent class for display
-			FString ParentClassPath;
-			AssetData.GetTagValue(TEXT("ParentClass"), ParentClassPath);
-			BlueprintResult->SetStringField(TEXT("parentClass"), ParentClassPath);
-			
-			BlueprintResult->SetArrayField(TEXT("matches"), MatchesArray);
-			
-			ResultsArray.Add(MakeShareable(new FJsonValueObject(BlueprintResult)));
-		}
+		Server->RegisterTool(MoveTemp(Tool));
 	}
-
-	// Build final result JSON - output has complex nested structure, so we build JSON manually
-	// but we've used USTRUCT for all input processing
-	ResultsJson->SetArrayField(TEXT("results"), ResultsArray);
-	ResultsJson->SetNumberField(TEXT("totalResults"), TotalMatches);
 	
-	TSharedPtr<FJsonObject> SearchCriteriaJson = MakeShareable(new FJsonObject);
-	SearchCriteriaJson->SetStringField(TEXT("searchType"), Params.searchType);
-	SearchCriteriaJson->SetStringField(TEXT("searchTerm"), Params.searchTerm);
-	if (!Params.packagePath.IsEmpty())
 	{
-		SearchCriteriaJson->SetStringField(TEXT("packagePath"), Params.packagePath);
+		FUMCP_ToolDefinition Tool;
+		Tool.name = TEXT("get_asset_references");
+		Tool.description = TEXT("Get all assets that reference a specified asset. Returns an array of asset paths that reference the specified asset. Use this to understand what assets depend on this asset, which is critical for impact analysis, refactoring safety, and unused asset detection. Very useful when doing asset searches and queries with existing tools. Supports both hard references (direct references) and soft references (searchable references).");
+		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::GetAssetReferences);
+		
+		// Generate input schema from USTRUCT with descriptions
+		TMap<FString, FString> InputDescriptions;
+		InputDescriptions.Add(TEXT("assetPath"), TEXT("The asset path to get references for. Format: '/Game/Folder/AssetName' or '/Game/Folder/AssetName.AssetName'. Examples: '/Game/MyAsset', '/Game/Blueprints/BP_Player', '/Engine/EditorMaterials/GridMaterial'. Must start with '/Game/' or '/Engine/'. Asset must exist in the project."));
+		InputDescriptions.Add(TEXT("bIncludeHardReferences"), TEXT("Whether to include hard references (direct references). Defaults to true. Hard references are assets that directly reference this asset."));
+		InputDescriptions.Add(TEXT("bIncludeSoftReferences"), TEXT("Whether to include soft references (searchable references). Defaults to false. Soft references are assets that reference this asset via searchable references (e.g., string-based asset references)."));
+		TArray<FString> InputRequired;
+		InputRequired.Add(TEXT("assetPath"));
+		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_GetAssetReferencesParams>(InputDescriptions, InputRequired);
+		
+		// Generate output schema from USTRUCT with descriptions
+		TMap<FString, FString> OutputDescriptions;
+		OutputDescriptions.Add(TEXT("bSuccess"), TEXT("Whether the operation completed successfully"));
+		OutputDescriptions.Add(TEXT("assetPath"), TEXT("The asset path that was queried"));
+		OutputDescriptions.Add(TEXT("references"), TEXT("Array of asset paths that reference this asset"));
+		OutputDescriptions.Add(TEXT("count"), TEXT("Number of references found"));
+		OutputDescriptions.Add(TEXT("error"), TEXT("Error message if bSuccess is false"));
+		TArray<FString> OutputRequired;
+		OutputRequired.Add(TEXT("bSuccess"));
+		OutputRequired.Add(TEXT("assetPath"));
+		OutputRequired.Add(TEXT("references"));
+		OutputRequired.Add(TEXT("count"));
+		TSharedPtr<FJsonObject> GetAssetReferencesOutputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_GetAssetReferencesResult>(OutputDescriptions, OutputRequired);
+		if (GetAssetReferencesOutputSchema.IsValid())
+		{
+			Tool.outputSchema = GetAssetReferencesOutputSchema;
+		}
+		else
+		{
+			UE_LOG(LogUnrealMCPServer, Error, TEXT("Failed to generate outputSchema for get_asset_references tool"));
+		}
+		Server->RegisterTool(MoveTemp(Tool));
 	}
-	SearchCriteriaJson->SetBoolField(TEXT("recursive"), Params.bRecursive);
-	ResultsJson->SetObjectField(TEXT("searchCriteria"), SearchCriteriaJson);
-
-	// Convert to JSON string
-	FString ResultJsonString;
-	TSharedRef<TJsonWriter<>> Writer = TJsonWriterFactory<>::Create(&ResultJsonString);
-	FJsonSerializer::Serialize(ResultsJson.ToSharedRef(), Writer);
-
-	Content.text = ResultJsonString;
 	
-	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchBlueprints: Completed search, found %d matches"), TotalMatches);
-	
-	return true;
+	{
+		FUMCP_ToolDefinition Tool;
+		Tool.name = TEXT("get_asset_dependency_tree");
+		Tool.description = TEXT("Get the complete dependency tree for a specified asset. Returns a recursive tree structure showing all dependencies and their dependencies. Use this for complete dependency mapping and recursive analysis. The tree includes depth information for each node. Very useful when doing asset searches and queries with existing tools. Supports both hard dependencies (direct references) and soft dependencies (searchable references). Use maxDepth to limit recursion depth and prevent infinite loops.");
+		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::GetAssetDependencyTree);
+		
+		// Generate input schema from USTRUCT with descriptions
+		TMap<FString, FString> InputDescriptions;
+		InputDescriptions.Add(TEXT("assetPath"), TEXT("The asset path to get dependency tree for. Format: '/Game/Folder/AssetName' or '/Game/Folder/AssetName.AssetName'. Examples: '/Game/MyAsset', '/Game/Blueprints/BP_Player', '/Engine/EditorMaterials/GridMaterial'. Must start with '/Game/' or '/Engine/'. Asset must exist in the project."));
+		InputDescriptions.Add(TEXT("maxDepth"), TEXT("Maximum recursion depth to prevent infinite loops. Defaults to 10. Must be at least 1. Increase for deeper dependency trees, but be aware that very deep trees can be expensive to compute."));
+		InputDescriptions.Add(TEXT("bIncludeHardDependencies"), TEXT("Whether to include hard dependencies (direct references). Defaults to true. Hard dependencies are assets that are directly referenced by the asset."));
+		InputDescriptions.Add(TEXT("bIncludeSoftDependencies"), TEXT("Whether to include soft dependencies (searchable references). Defaults to false. Soft dependencies are assets that are referenced via searchable references (e.g., string-based asset references)."));
+		TArray<FString> InputRequired;
+		InputRequired.Add(TEXT("assetPath"));
+		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_GetAssetDependencyTreeParams>(InputDescriptions, InputRequired);
+		
+		// Generate output schema from USTRUCT with descriptions
+		TMap<FString, FString> OutputDescriptions;
+		OutputDescriptions.Add(TEXT("bSuccess"), TEXT("Whether the operation completed successfully"));
+		OutputDescriptions.Add(TEXT("assetPath"), TEXT("The asset path that was queried"));
+		OutputDescriptions.Add(TEXT("tree"), TEXT("Array of dependency tree nodes, each containing assetPath, depth, and dependencies"));
+		OutputDescriptions.Add(TEXT("totalNodes"), TEXT("Total number of nodes in the dependency tree"));
+		OutputDescriptions.Add(TEXT("maxDepthReached"), TEXT("Maximum depth reached in the dependency tree"));
+		OutputDescriptions.Add(TEXT("error"), TEXT("Error message if bSuccess is false"));
+		TArray<FString> OutputRequired;
+		OutputRequired.Add(TEXT("bSuccess"));
+		OutputRequired.Add(TEXT("assetPath"));
+		OutputRequired.Add(TEXT("tree"));
+		OutputRequired.Add(TEXT("totalNodes"));
+		OutputRequired.Add(TEXT("maxDepthReached"));
+		TSharedPtr<FJsonObject> GetAssetDependencyTreeOutputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_GetAssetDependencyTreeResult>(OutputDescriptions, OutputRequired);
+		if (GetAssetDependencyTreeOutputSchema.IsValid())
+		{
+			Tool.outputSchema = GetAssetDependencyTreeOutputSchema;
+		}
+		else
+		{
+			UE_LOG(LogUnrealMCPServer, Error, TEXT("Failed to generate outputSchema for get_asset_dependency_tree tool"));
+		}
+		Server->RegisterTool(MoveTemp(Tool));
+	}
 }
 
 bool FUMCP_AssetTools::ExportAssetToText(const FString& ObjectPath, const FString& Format, FString& OutExportedText, FString& OutError)
@@ -715,6 +667,18 @@ bool FUMCP_AssetTools::ExportAsset(TSharedPtr<FJsonObject> arguments, TArray<FUM
 		Params.format = TEXT("T3D");
 	}
 	Result.format = Params.format;
+
+	// Check if the asset is a Blueprint - Blueprints must use batch export
+	UObject* Object = LoadObject<UObject>(nullptr, *Params.objectPath);
+	if (Object && Object->IsA<UBlueprint>())
+	{
+		Result.error = TEXT("Blueprint assets cannot be exported using export_asset. Use batch_export_assets instead, as Blueprint exports generate responses too large to be parsed.");
+		if (!UMCP_ToJsonString(Result, Content.text))
+		{
+			Content.text = TEXT("Failed to serialize error result");
+		}
+		return false;
+	}
 
 	// Use helper function to export asset to text
 	FString ExportedText;
@@ -1555,6 +1519,443 @@ bool FUMCP_AssetTools::SearchAssets(TSharedPtr<FJsonObject> arguments, TArray<FU
 	
 	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchAssets: Completed search, found %d assets"), AssetsArray.Num());
 	
+	return true;
+}
+
+bool FUMCP_AssetTools::GetAssetDependencies(TSharedPtr<FJsonObject> arguments, TArray<FUMCP_CallToolResultContent>& OutContent)
+{
+	auto& Content = OutContent.Add_GetRef(FUMCP_CallToolResultContent());
+	Content.type = TEXT("text");
+
+	// Convert JSON to USTRUCT at the start
+	FUMCP_GetAssetDependenciesParams Params;
+	if (!arguments.IsValid() || !UMCP_CreateFromJsonObject(arguments, Params))
+	{
+		Content.text = TEXT("Invalid parameters");
+		return false;
+	}
+
+	if (Params.assetPath.IsEmpty())
+	{
+		Content.text = TEXT("Missing required parameter: assetPath");
+		return false;
+	}
+
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("GetAssetDependencies: Path=%s, Hard=%s, Soft=%s"), 
+		*Params.assetPath, Params.bIncludeHardDependencies ? TEXT("true") : TEXT("false"), 
+		Params.bIncludeSoftDependencies ? TEXT("true") : TEXT("false"));
+
+	// Get Asset Registry
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	// Use FSoftObjectPath to get asset
+	FSoftObjectPath SoftPath(Params.assetPath);
+	FAssetData AssetData = AssetRegistry.GetAssetByObjectPath(SoftPath);
+
+	// Work with USTRUCT throughout
+	FUMCP_GetAssetDependenciesResult Result;
+	Result.assetPath = Params.assetPath;
+	Result.bSuccess = false;
+	Result.count = 0;
+
+	if (!AssetData.IsValid())
+	{
+		Result.error = FString::Printf(TEXT("Asset not found: %s"), *Params.assetPath);
+		if (!UMCP_ToJsonString(Result, Content.text))
+		{
+			Content.text = TEXT("Failed to serialize error result");
+		}
+		return false;
+	}
+
+	// Build dependency query flags using new API
+	// Check if neither dependency type is requested
+	if (!Params.bIncludeHardDependencies && !Params.bIncludeSoftDependencies)
+	{
+		// Neither hard nor soft dependencies requested - return empty result
+		Result.count = 0;
+		Result.bSuccess = true;
+		if (!UMCP_ToJsonString(Result, Content.text))
+		{
+			Content.text = TEXT("Failed to serialize result");
+		}
+		return true;
+	}
+
+	// Build dependency query flags
+	UE::AssetRegistry::EDependencyQuery DependencyQueryEnum;
+	if (Params.bIncludeHardDependencies && Params.bIncludeSoftDependencies)
+	{
+		DependencyQueryEnum = UE::AssetRegistry::EDependencyQuery::Hard | UE::AssetRegistry::EDependencyQuery::Soft;
+	}
+	else if (Params.bIncludeHardDependencies)
+	{
+		DependencyQueryEnum = UE::AssetRegistry::EDependencyQuery::Hard;
+	}
+	else // Params.bIncludeSoftDependencies must be true
+	{
+		DependencyQueryEnum = UE::AssetRegistry::EDependencyQuery::Soft;
+	}
+
+	// Get dependencies
+	TArray<FAssetIdentifier> Dependencies;
+	UE::AssetRegistry::FDependencyQuery DependencyQuery(DependencyQueryEnum);
+	AssetRegistry.GetDependencies(FAssetIdentifier(AssetData.PackageName), Dependencies, UE::AssetRegistry::EDependencyCategory::Package, DependencyQuery);
+
+	// Convert to string array
+	Result.dependencies.Empty();
+	for (const FAssetIdentifier& Dep : Dependencies)
+	{
+		// Get asset data for the dependency
+		TArray<FAssetData> DepAssetDataArray;
+		AssetRegistry.GetAssetsByPackageName(Dep.PackageName, DepAssetDataArray);
+		if (DepAssetDataArray.Num() > 0 && DepAssetDataArray[0].IsValid())
+		{
+			Result.dependencies.Add(DepAssetDataArray[0].GetSoftObjectPath().ToString());
+		}
+		else
+		{
+			// If we can't get asset data, use package name as fallback
+			Result.dependencies.Add(Dep.PackageName.ToString());
+		}
+	}
+
+	Result.count = Result.dependencies.Num();
+	Result.bSuccess = true;
+
+	// Convert USTRUCT to JSON string at the end
+	if (!UMCP_ToJsonString(Result, Content.text))
+	{
+		Content.text = TEXT("Failed to serialize result");
+		return false;
+	}
+
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("GetAssetDependencies: Completed for %s, found %d dependencies"), 
+		*Params.assetPath, Result.count);
+
+	return true;
+}
+
+bool FUMCP_AssetTools::GetAssetReferences(TSharedPtr<FJsonObject> arguments, TArray<FUMCP_CallToolResultContent>& OutContent)
+{
+	auto& Content = OutContent.Add_GetRef(FUMCP_CallToolResultContent());
+	Content.type = TEXT("text");
+
+	// Convert JSON to USTRUCT at the start
+	FUMCP_GetAssetReferencesParams Params;
+	if (!arguments.IsValid() || !UMCP_CreateFromJsonObject(arguments, Params))
+	{
+		Content.text = TEXT("Invalid parameters");
+		return false;
+	}
+
+	if (Params.assetPath.IsEmpty())
+	{
+		Content.text = TEXT("Missing required parameter: assetPath");
+		return false;
+	}
+
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("GetAssetReferences: Path=%s, Hard=%s, Soft=%s"), 
+		*Params.assetPath, Params.bIncludeHardReferences ? TEXT("true") : TEXT("false"), 
+		Params.bIncludeSoftReferences ? TEXT("true") : TEXT("false"));
+
+	// Get Asset Registry
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	// Use FSoftObjectPath to get asset
+	FSoftObjectPath SoftPath(Params.assetPath);
+	FAssetData AssetData = AssetRegistry.GetAssetByObjectPath(SoftPath);
+
+	// Work with USTRUCT throughout
+	FUMCP_GetAssetReferencesResult Result;
+	Result.assetPath = Params.assetPath;
+	Result.bSuccess = false;
+	Result.count = 0;
+
+	if (!AssetData.IsValid())
+	{
+		Result.error = FString::Printf(TEXT("Asset not found: %s"), *Params.assetPath);
+		if (!UMCP_ToJsonString(Result, Content.text))
+		{
+			Content.text = TEXT("Failed to serialize error result");
+		}
+		return false;
+	}
+
+	// Build dependency query flags using new API (same enum used for references)
+	// Check if neither reference type is requested
+	if (!Params.bIncludeHardReferences && !Params.bIncludeSoftReferences)
+	{
+		// Neither hard nor soft references requested - return empty result
+		Result.count = 0;
+		Result.bSuccess = true;
+		if (!UMCP_ToJsonString(Result, Content.text))
+		{
+			Content.text = TEXT("Failed to serialize result");
+		}
+		return true;
+	}
+
+	// Build dependency query flags
+	UE::AssetRegistry::EDependencyQuery DependencyQueryEnum;
+	if (Params.bIncludeHardReferences && Params.bIncludeSoftReferences)
+	{
+		DependencyQueryEnum = UE::AssetRegistry::EDependencyQuery::Hard | UE::AssetRegistry::EDependencyQuery::Soft;
+	}
+	else if (Params.bIncludeHardReferences)
+	{
+		DependencyQueryEnum = UE::AssetRegistry::EDependencyQuery::Hard;
+	}
+	else // Params.bIncludeSoftReferences must be true
+	{
+		DependencyQueryEnum = UE::AssetRegistry::EDependencyQuery::Soft;
+	}
+
+	// Get referencers (assets that reference this asset)
+	TArray<FAssetIdentifier> Referencers;
+	UE::AssetRegistry::FDependencyQuery DependencyQuery(DependencyQueryEnum);
+	AssetRegistry.GetReferencers(FAssetIdentifier(AssetData.PackageName), Referencers, UE::AssetRegistry::EDependencyCategory::Package, DependencyQuery);
+
+	// Convert to string array
+	Result.references.Empty();
+	for (const FAssetIdentifier& Ref : Referencers)
+	{
+		// Get asset data for the referencer
+		TArray<FAssetData> RefAssetDataArray;
+		AssetRegistry.GetAssetsByPackageName(Ref.PackageName, RefAssetDataArray);
+		if (RefAssetDataArray.Num() > 0 && RefAssetDataArray[0].IsValid())
+		{
+			Result.references.Add(RefAssetDataArray[0].GetSoftObjectPath().ToString());
+		}
+		else
+		{
+			// If we can't get asset data, use package name as fallback
+			Result.references.Add(Ref.PackageName.ToString());
+		}
+	}
+
+	Result.count = Result.references.Num();
+	Result.bSuccess = true;
+
+	// Convert USTRUCT to JSON string at the end
+	if (!UMCP_ToJsonString(Result, Content.text))
+	{
+		Content.text = TEXT("Failed to serialize result");
+		return false;
+	}
+
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("GetAssetReferences: Completed for %s, found %d references"), 
+		*Params.assetPath, Result.count);
+
+	return true;
+}
+
+bool FUMCP_AssetTools::GetAssetDependencyTree(TSharedPtr<FJsonObject> arguments, TArray<FUMCP_CallToolResultContent>& OutContent)
+{
+	auto& Content = OutContent.Add_GetRef(FUMCP_CallToolResultContent());
+	Content.type = TEXT("text");
+
+	// Convert JSON to USTRUCT at the start
+	FUMCP_GetAssetDependencyTreeParams Params;
+	if (!arguments.IsValid() || !UMCP_CreateFromJsonObject(arguments, Params))
+	{
+		Content.text = TEXT("Invalid parameters");
+		return false;
+	}
+
+	if (Params.assetPath.IsEmpty())
+	{
+		Content.text = TEXT("Missing required parameter: assetPath");
+		return false;
+	}
+
+	if (Params.maxDepth < 1)
+	{
+		Content.text = TEXT("maxDepth must be at least 1");
+		return false;
+	}
+
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("GetAssetDependencyTree: Path=%s, MaxDepth=%d, Hard=%s, Soft=%s"), 
+		*Params.assetPath, Params.maxDepth, Params.bIncludeHardDependencies ? TEXT("true") : TEXT("false"), 
+		Params.bIncludeSoftDependencies ? TEXT("true") : TEXT("false"));
+
+	// Get Asset Registry
+	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
+	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	// Use FSoftObjectPath to get asset
+	FSoftObjectPath SoftPath(Params.assetPath);
+	FAssetData AssetData = AssetRegistry.GetAssetByObjectPath(SoftPath);
+
+	// Work with USTRUCT throughout
+	FUMCP_GetAssetDependencyTreeResult Result;
+	Result.assetPath = Params.assetPath;
+	Result.bSuccess = false;
+	Result.totalNodes = 0;
+	Result.maxDepthReached = 0;
+
+	if (!AssetData.IsValid())
+	{
+		Result.error = FString::Printf(TEXT("Asset not found: %s"), *Params.assetPath);
+		if (!UMCP_ToJsonString(Result, Content.text))
+		{
+			Content.text = TEXT("Failed to serialize error result");
+		}
+		return false;
+	}
+
+	// Build dependency query flags using new API
+	// Check if neither dependency type is requested
+	if (!Params.bIncludeHardDependencies && !Params.bIncludeSoftDependencies)
+	{
+		// Neither hard nor soft dependencies requested - return empty tree
+		Result.bSuccess = true;
+		Result.totalNodes = 1; // Just the root node
+		Result.maxDepthReached = 0;
+		FUMCP_AssetDependencyNode RootNode;
+		RootNode.assetPath = Params.assetPath;
+		RootNode.depth = 0;
+		RootNode.dependencies.Empty();
+		Result.tree.Add(RootNode);
+		if (!UMCP_ToJsonString(Result, Content.text))
+		{
+			Content.text = TEXT("Failed to serialize result");
+		}
+		return true;
+	}
+
+	// Build dependency query flags
+	UE::AssetRegistry::EDependencyQuery DependencyQueryEnum;
+	if (Params.bIncludeHardDependencies && Params.bIncludeSoftDependencies)
+	{
+		DependencyQueryEnum = UE::AssetRegistry::EDependencyQuery::Hard | UE::AssetRegistry::EDependencyQuery::Soft;
+	}
+	else if (Params.bIncludeHardDependencies)
+	{
+		DependencyQueryEnum = UE::AssetRegistry::EDependencyQuery::Hard;
+	}
+	else // Params.bIncludeSoftDependencies must be true
+	{
+		DependencyQueryEnum = UE::AssetRegistry::EDependencyQuery::Soft;
+	}
+
+	// Recursive function to build dependency tree
+	TSet<FName> VisitedPackages; // Track visited packages to prevent cycles
+	TMap<FName, FString> PackageToAssetPath; // Cache package name to asset path mapping
+	UE::AssetRegistry::FDependencyQuery DependencyQuery(DependencyQueryEnum);
+
+	// Use TFunction to allow recursive lambda
+	TFunction<void(const FAssetIdentifier&, int32, FUMCP_AssetDependencyNode&)> BuildDependencyTreeRecursive;
+	BuildDependencyTreeRecursive = [&](const FAssetIdentifier& AssetId, int32 CurrentDepth, FUMCP_AssetDependencyNode& OutNode) -> void
+	{
+		if (CurrentDepth > Params.maxDepth)
+		{
+			return;
+		}
+
+		// Get asset path for this node
+		FString AssetPathStr;
+		if (PackageToAssetPath.Contains(AssetId.PackageName))
+		{
+			AssetPathStr = PackageToAssetPath[AssetId.PackageName];
+		}
+		else
+		{
+			TArray<FAssetData> NodeAssetDataArray;
+			AssetRegistry.GetAssetsByPackageName(AssetId.PackageName, NodeAssetDataArray);
+			if (NodeAssetDataArray.Num() > 0 && NodeAssetDataArray[0].IsValid())
+			{
+				AssetPathStr = NodeAssetDataArray[0].GetSoftObjectPath().ToString();
+				PackageToAssetPath.Add(AssetId.PackageName, AssetPathStr);
+			}
+			else
+			{
+				AssetPathStr = AssetId.PackageName.ToString();
+			}
+		}
+
+		OutNode.assetPath = AssetPathStr;
+		OutNode.depth = CurrentDepth;
+		OutNode.dependencies.Empty();
+
+		// Mark as visited to prevent cycles
+		VisitedPackages.Add(AssetId.PackageName);
+
+		// Get dependencies for this asset
+		TArray<FAssetIdentifier> Dependencies;
+		AssetRegistry.GetDependencies(AssetId, Dependencies, UE::AssetRegistry::EDependencyCategory::Package, DependencyQuery);
+
+		// Process each dependency
+		for (const FAssetIdentifier& Dep : Dependencies)
+		{
+			// Get asset path for dependency
+			FString DepAssetPathStr;
+			if (PackageToAssetPath.Contains(Dep.PackageName))
+			{
+				DepAssetPathStr = PackageToAssetPath[Dep.PackageName];
+			}
+			else
+			{
+				TArray<FAssetData> DepAssetDataArray;
+				AssetRegistry.GetAssetsByPackageName(Dep.PackageName, DepAssetDataArray);
+				if (DepAssetDataArray.Num() > 0 && DepAssetDataArray[0].IsValid())
+				{
+					DepAssetPathStr = DepAssetDataArray[0].GetSoftObjectPath().ToString();
+					PackageToAssetPath.Add(Dep.PackageName, DepAssetPathStr);
+				}
+				else
+				{
+					DepAssetPathStr = Dep.PackageName.ToString();
+				}
+			}
+
+			OutNode.dependencies.Add(DepAssetPathStr);
+
+			// Recursively process dependency if not visited and within depth limit
+			if (!VisitedPackages.Contains(Dep.PackageName) && CurrentDepth < Params.maxDepth)
+			{
+				FUMCP_AssetDependencyNode ChildNode;
+				BuildDependencyTreeRecursive(Dep, CurrentDepth + 1, ChildNode);
+				if (!ChildNode.assetPath.IsEmpty())
+				{
+					Result.tree.Add(ChildNode);
+				}
+			}
+		}
+
+		// Unmark as visited (allow it to appear in different branches)
+		VisitedPackages.Remove(AssetId.PackageName);
+	};
+
+	// Build tree starting from root asset
+	FUMCP_AssetDependencyNode RootNode;
+	BuildDependencyTreeRecursive(FAssetIdentifier(AssetData.PackageName), 0, RootNode);
+	Result.tree.Insert(RootNode, 0); // Insert root at beginning
+
+	// Calculate statistics
+	Result.totalNodes = Result.tree.Num();
+	for (const FUMCP_AssetDependencyNode& Node : Result.tree)
+	{
+		if (Node.depth > Result.maxDepthReached)
+		{
+			Result.maxDepthReached = Node.depth;
+		}
+	}
+
+	Result.bSuccess = true;
+
+	// Convert USTRUCT to JSON string at the end
+	if (!UMCP_ToJsonString(Result, Content.text))
+	{
+		Content.text = TEXT("Failed to serialize result");
+		return false;
+	}
+
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("GetAssetDependencyTree: Completed for %s, found %d nodes, max depth=%d"), 
+		*Params.assetPath, Result.totalNodes, Result.maxDepthReached);
+
 	return true;
 }
 

@@ -114,28 +114,33 @@ bool FUMCP_JsonRpcRequest::CreateFromJsonString(const FString& JsonString, FUMCP
 }
 bool FUMCP_JsonRpcError::ToJsonObject(TSharedPtr<FJsonObject>& OutJsonObject) const
 {
-	// FJsonObjectConverter::UStructToJsonObject will only serialize UPROPERTY members.
-	// We need to construct it manually or use a hybrid approach if we want to keep UPROPERTY for code/message.
-	OutJsonObject->SetNumberField(TEXT("code"), code);
-	OutJsonObject->SetStringField(TEXT("message"), message);
-	if (data.IsValid()) // data is TSharedPtr<FJsonValue>
+	// Use the standard converter for UPROPERTY fields (code, message)
+	// Then manually add the data field which is TSharedPtr<FJsonValue> and can't be auto-serialized
+	if (!UMCP_ToJsonObject(*this, OutJsonObject))
+	{
+		return false;
+	}
+	// Manually add the data field if it's valid
+	if (data.IsValid())
 	{
 		OutJsonObject->SetField(TEXT("data"), data);
 	}
-	return true; // Assume success for manual construction
+	return true;
 }
 
 bool FUMCP_JsonRpcError::CreateFromJsonObject(const TSharedPtr<FJsonObject>& JsonObject, FUMCP_JsonRpcError& OutErrorObject)
 {
 	if (!JsonObject.IsValid()) return false;
 
-	// Manually parse UPROPERTY fields
-	if (!JsonObject->TryGetNumberField(TEXT("code"), OutErrorObject.code)) return false;
-	if (!JsonObject->TryGetStringField(TEXT("message"), OutErrorObject.message)) return false;
-
+	// Use the standard converter for UPROPERTY fields (code, message)
+	if (!UMCP_CreateFromJsonObject(JsonObject, OutErrorObject))
+	{
+		return false;
+	}
+	// Manually extract the data field if it exists (TSharedPtr<FJsonValue> can't be auto-deserialized)
 	if (JsonObject->HasField(TEXT("data")))
 	{
-		OutErrorObject.data = JsonObject->GetField<EJson::None>(TEXT("data")); // Get data as FJsonValue
+		OutErrorObject.data = JsonObject->GetField<EJson::None>(TEXT("data"));
 	}
 	return true;
 }
@@ -251,185 +256,52 @@ FString UMCP_PropertyNameToJsonName(const FString& PropertyName)
 	return JsonName;
 }
 
-// Helper function to generate JSON Schema from USTRUCT
-TSharedPtr<FJsonObject> UMCP_GenerateJsonSchemaFromStruct(
-	const UScriptStruct* Struct,
-	const TMap<FString, FString>& PropertyDescriptions,
-	const TArray<FString>& RequiredFields,
-	const TMap<FString, TArray<FString>>& EnumValues)
+// Helper function to extract default value from JSON (much simpler than direct property access)
+TSharedPtr<FJsonValue> UMCP_ExtractDefaultValueFromJson(FProperty* Property, const TSharedPtr<FJsonObject>& StructJson)
 {
-	if (!Struct)
+	if (!Property || !StructJson.IsValid())
 	{
 		return nullptr;
 	}
 
-	TSharedPtr<FJsonObject> Schema = MakeShared<FJsonObject>();
-	Schema->SetStringField(TEXT("type"), TEXT("object"));
+	// Convert property name to camelCase to match JSON output
+	FString PropertyName = Property->GetName();
+	FString JsonPropertyName = UMCP_PropertyNameToJsonName(PropertyName);
 
-	TSharedPtr<FJsonObject> Properties = MakeShared<FJsonObject>();
-	TArray<TSharedPtr<FJsonValue>> RequiredFieldsArray;
-
-	// Iterate through all properties in the struct
-	for (TFieldIterator<FProperty> It(Struct); It; ++It)
+	if (!StructJson->HasField(JsonPropertyName))
 	{
-		FProperty* Property = *It;
-		if (!Property)
-		{
-			continue;
-		}
-
-		FString PropertyName = Property->GetName();
-		// Convert to camelCase to match JSON output (Unreal's JSON converter standardizes case to camelCase)
-		FString JsonPropertyName = UMCP_PropertyNameToJsonName(PropertyName);
-		TSharedPtr<FJsonObject> PropertySchema = MakeShared<FJsonObject>();
-
-		// Determine JSON Schema type from Unreal property type
-		if (FStrProperty* StrProp = CastField<FStrProperty>(Property))
-		{
-			PropertySchema->SetStringField(TEXT("type"), TEXT("string"));
-			
-			// Check if this property has enum values (use original PropertyName for lookup)
-			if (EnumValues.Contains(PropertyName))
-			{
-				TArray<TSharedPtr<FJsonValue>> EnumArray;
-				for (const FString& EnumValue : EnumValues[PropertyName])
-				{
-					EnumArray.Add(MakeShared<FJsonValueString>(EnumValue));
-				}
-				PropertySchema->SetArrayField(TEXT("enum"), EnumArray);
-			}
-		}
-		else if (FBoolProperty* BoolProp = CastField<FBoolProperty>(Property))
-		{
-			PropertySchema->SetStringField(TEXT("type"), TEXT("boolean"));
-		}
-		else if (FIntProperty* IntProp = CastField<FIntProperty>(Property))
-		{
-			PropertySchema->SetStringField(TEXT("type"), TEXT("number"));
-		}
-		else if (FInt64Property* Int64Prop = CastField<FInt64Property>(Property))
-		{
-			PropertySchema->SetStringField(TEXT("type"), TEXT("number"));
-		}
-		else if (FFloatProperty* FloatProp = CastField<FFloatProperty>(Property))
-		{
-			PropertySchema->SetStringField(TEXT("type"), TEXT("number"));
-		}
-		else if (FDoubleProperty* DoubleProp = CastField<FDoubleProperty>(Property))
-		{
-			PropertySchema->SetStringField(TEXT("type"), TEXT("number"));
-		}
-		else if (FArrayProperty* ArrayProp = CastField<FArrayProperty>(Property))
-		{
-			PropertySchema->SetStringField(TEXT("type"), TEXT("array"));
-			TSharedPtr<FJsonObject> ItemsSchema = MakeShared<FJsonObject>();
-			
-			// Determine item type
-			FProperty* InnerProp = ArrayProp->Inner;
-			if (CastField<FStrProperty>(InnerProp))
-			{
-				ItemsSchema->SetStringField(TEXT("type"), TEXT("string"));
-			}
-			else if (CastField<FIntProperty>(InnerProp) || CastField<FInt64Property>(InnerProp) || 
-			         CastField<FFloatProperty>(InnerProp) || CastField<FDoubleProperty>(InnerProp))
-			{
-				ItemsSchema->SetStringField(TEXT("type"), TEXT("number"));
-			}
-			else if (CastField<FBoolProperty>(InnerProp))
-			{
-				ItemsSchema->SetStringField(TEXT("type"), TEXT("boolean"));
-			}
-			else
-			{
-				// For complex types, default to object
-				ItemsSchema->SetStringField(TEXT("type"), TEXT("object"));
-			}
-			
-			PropertySchema->SetObjectField(TEXT("items"), ItemsSchema);
-		}
-		else if (FMapProperty* MapProp = CastField<FMapProperty>(Property))
-		{
-			PropertySchema->SetStringField(TEXT("type"), TEXT("object"));
-			// For maps, we assume string values (common case)
-			TSharedPtr<FJsonObject> AdditionalProps = MakeShared<FJsonObject>();
-			AdditionalProps->SetStringField(TEXT("type"), TEXT("string"));
-			PropertySchema->SetObjectField(TEXT("additionalProperties"), AdditionalProps);
-		}
-		else if (FStructProperty* StructProp = CastField<FStructProperty>(Property))
-		{
-			// Recursively generate schema for nested structs
-			TSharedPtr<FJsonObject> NestedSchema = UMCP_GenerateJsonSchemaFromStruct(StructProp->Struct);
-			if (NestedSchema.IsValid())
-			{
-				PropertySchema = NestedSchema;
-			}
-			else
-			{
-				PropertySchema->SetStringField(TEXT("type"), TEXT("object"));
-			}
-		}
-		else
-		{
-			// Default to object for unknown types
-			PropertySchema->SetStringField(TEXT("type"), TEXT("object"));
-		}
-
-		// Add description - prefer provided description, then metadata, then empty
-		// Use original PropertyName for lookup
-		FString Description;
-		if (PropertyDescriptions.Contains(PropertyName))
-		{
-			Description = PropertyDescriptions[PropertyName];
-		}
-		else
-		{
-			Description = Property->GetMetaData(TEXT("ToolTip"));
-			if (Description.IsEmpty())
-			{
-				Description = Property->GetMetaData(TEXT("Description"));
-			}
-		}
-		if (!Description.IsEmpty())
-		{
-			PropertySchema->SetStringField(TEXT("description"), Description);
-		}
-
-		// Use camelCase property name in schema to match JSON output
-		Properties->SetObjectField(JsonPropertyName, PropertySchema);
+		return nullptr;
 	}
 
-	Schema->SetObjectField(TEXT("properties"), Properties);
-	
-	// Use provided required fields, or auto-detect from property flags
-	if (RequiredFields.Num() > 0)
+	TSharedPtr<FJsonValue> DefaultValue = StructJson->GetField<EJson::None>(JsonPropertyName);
+	if (!DefaultValue.IsValid())
 	{
-		TArray<TSharedPtr<FJsonValue>> RequiredFieldsJson;
-		for (const FString& RequiredField : RequiredFields)
-		{
-			// Convert required field names to camelCase to match JSON output
-			FString JsonRequiredField = UMCP_PropertyNameToJsonName(RequiredField);
-			RequiredFieldsJson.Add(MakeShared<FJsonValueString>(JsonRequiredField));
-		}
-		Schema->SetArrayField(TEXT("required"), RequiredFieldsJson);
-	}
-	else
-	{
-		// If an explicit list is not provided, treat all fields as required
-		for (TFieldIterator<FProperty> It(Struct); It; ++It)
-		{
-			FProperty* Property = *It;
-			if (Property)
-			{
-				// Convert property names to camelCase to match JSON output
-				FString JsonPropertyName = UMCP_PropertyNameToJsonName(Property->GetName());
-				RequiredFieldsArray.Add(MakeShared<FJsonValueString>(JsonPropertyName));
-			}
-		}
-		if (RequiredFieldsArray.Num() > 0)
-		{
-			Schema->SetArrayField(TEXT("required"), RequiredFieldsArray);
-		}
+		return nullptr;
 	}
 
-	return Schema;
+	// Filter based on JSON value type (simpler than checking property type)
+	// For strings, only set default if non-empty (empty string is not a meaningful default)
+	if (DefaultValue->Type == EJson::String)
+	{
+		FString DefaultStr = DefaultValue->AsString();
+		if (!DefaultStr.IsEmpty())
+		{
+			return DefaultValue;
+		}
+		return nullptr;
+	}
+	// For arrays, only set default if it's an empty array (non-empty arrays are too complex)
+	else if (DefaultValue->Type == EJson::Array)
+	{
+		const TArray<TSharedPtr<FJsonValue>>* ArrayValue;
+		if (DefaultValue->TryGetArray(ArrayValue) && ArrayValue && ArrayValue->Num() == 0)
+		{
+			return DefaultValue;
+		}
+		return nullptr;
+	}
+	// For all other types (numbers, booleans, objects, null), return the value as-is
+	// Note: Nested structs will be handled as objects, which is fine for JSON Schema
+	return DefaultValue;
 }
+
