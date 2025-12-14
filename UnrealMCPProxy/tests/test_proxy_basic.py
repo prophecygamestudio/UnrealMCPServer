@@ -1,4 +1,9 @@
-"""Basic functionality tests for UnrealMCPProxy."""
+"""Basic functionality tests for UnrealMCPProxy.
+
+DEPRECATED: This test file has been consolidated into test_proxy.py.
+All tests from this file are now available in the consolidated test suite.
+This file is kept for reference but should not be used for new tests.
+"""
 
 import asyncio
 import json

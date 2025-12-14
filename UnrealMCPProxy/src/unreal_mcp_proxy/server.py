@@ -2,108 +2,63 @@
 
 from __future__ import annotations
 
-import json
-import logging
-import os
-import sys
 import asyncio
-from enum import Enum
+import logging
+import sys
 from pathlib import Path
-from typing import Optional, Dict, Any, Callable
+from typing import Optional, Dict, Any, List
 
-# Add src directory to path when running as a script
-# This allows absolute imports to work when executed directly
-# Check if we're running as a script (__package__ will be None or not set)
+# Path manipulation for script execution
+# This allows the module to be run directly as a script (e.g., `python -m src.unreal_mcp_proxy.server`)
+# while still supporting absolute imports. This is a standard pattern for Python packages that need
+# to be both importable modules and executable scripts.
+# 
+# When run as a script, __package__ is None, so we add the src directory to sys.path.
+# When imported as a module, __package__ is set and imports work normally.
 try:
     package = __package__
 except NameError:
     package = None
 
-if not package:
-    # Get the directory containing this file
+# Determine if running as script or module
+is_script = not package
+
+if is_script:
+    # Running as script - add src directory to path for absolute imports
     current_file = Path(__file__).resolve()
-    # Go up to src directory (from src/unreal_mcp_proxy/server.py -> src/)
-    # current_file.parent = src/unreal_mcp_proxy/
-    # current_file.parent.parent = src/
-    src_dir = current_file.parent.parent
+    src_dir = current_file.parent.parent  # src/unreal_mcp_proxy/server.py -> src/
     if str(src_dir) not in sys.path:
         sys.path.insert(0, str(src_dir))
 
 from fastmcp import FastMCP
-from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Use absolute imports to work when running as a script
-from unreal_mcp_proxy.client.unreal_mcp import UnrealMCPClient, ConnectionState
-from unreal_mcp_proxy.tool_definitions import get_tool_definitions, compare_tool_definitions
-
-
-class MCPTransport(str, Enum):
-    """MCP transport types."""
-    stdio = "stdio"
-    sse = "sse"
-    http = "http"
-
-
-class ServerSettings(BaseSettings):
-    """Server configuration settings."""
-    model_config = SettingsConfigDict(env_prefix="unreal_mcp_proxy_", env_file=".env", extra='ignore')
-    
-    # Backend (Unreal MCP Server) settings
-    backend_host: str = "localhost"
-    backend_port: int = 30069
-    backend_timeout: int = 30
-    health_check_interval: int = 5
-    
-    # Proxy server settings
-    host: str = "0.0.0.0"
-    port: int = 30070
-    transport: MCPTransport = MCPTransport.stdio  # Default to STDIO for multiple agent support
-    
-    # Conditional feature flags
-    enable_markdown_export: bool = True
-    
-    # Logging
-    log_level: str = "INFO"
-    log_file: Optional[str] = None
-    log_format: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-
-
-def setup_logging(settings: ServerSettings):
-    """Configure logging based on settings."""
-    # Convert log_level string to logging level constant
-    numeric_level = getattr(logging, settings.log_level.upper(), logging.INFO)
-    
-    # Create formatter
-    formatter = logging.Formatter(settings.log_format)
-    
-    # Get root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(numeric_level)
-    
-    # Remove existing handlers to avoid duplicates
-    root_logger.handlers.clear()
-    
-    # Add console handler (always)
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(numeric_level)
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
-    
-    # Add file handler if log_file is specified
-    if settings.log_file:
-        # Ensure parent directory exists
-        log_path = Path(settings.log_file)
-        log_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        file_handler = logging.FileHandler(settings.log_file, encoding='utf-8')
-        file_handler.setLevel(numeric_level)
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
-    
-    # Create module-specific logger for proxy operations
-    proxy_logger = logging.getLogger("unreal_mcp_proxy")
-    proxy_logger.setLevel(numeric_level)
-
+# Import from new modules - use absolute imports when running as script
+if is_script:
+    # Absolute imports when running as script
+    from unreal_mcp_proxy.config import ServerSettings, MCPTransport, setup_logging
+    from unreal_mcp_proxy.errors import create_error_response
+    from unreal_mcp_proxy.compatibility import check_tool_compatibility
+    from unreal_mcp_proxy.tools import call_tool, handle_tool_result
+    from unreal_mcp_proxy.client.unreal_mcp import UnrealMCPClient, ConnectionState, UnrealMCPSettings
+    from unreal_mcp_proxy.tool_definitions import get_tool_definitions
+    from unreal_mcp_proxy.tool_decorators import read_only, write_operation
+    from unreal_mcp_proxy.constants import DEFAULT_EXPORT_FORMAT, DEFAULT_COMPILATION_TIMEOUT
+    from unreal_mcp_proxy.initialization import initialize_proxy
+    from unreal_mcp_proxy.resource_definitions import get_cached_resource_definitions
+    from unreal_mcp_proxy.prompt_definitions import get_cached_prompt_definitions, generate_prompt_messages
+else:
+    # Relative imports when running as module
+    from .config import ServerSettings, MCPTransport, setup_logging
+    from .errors import create_error_response
+    from .compatibility import check_tool_compatibility
+    from .tools import call_tool, handle_tool_result
+    from .client.unreal_mcp import UnrealMCPClient, ConnectionState, UnrealMCPSettings
+    from .tool_definitions import get_tool_definitions
+    from .tool_decorators import read_only, write_operation
+    from .constants import DEFAULT_EXPORT_FORMAT, DEFAULT_COMPILATION_TIMEOUT
+    from .initialization import initialize_proxy
+    from .resource_definitions import get_cached_resource_definitions
+    from .prompt_definitions import get_cached_prompt_definitions, generate_prompt_messages
 
 # Initialize settings and logging
 settings = ServerSettings()
@@ -113,535 +68,503 @@ logger = logging.getLogger(__name__)
 # Initialize FastMCP server
 mcp = FastMCP("unreal-mcp-proxy")
 
-# Initialize backend client
-unreal_client = UnrealMCPClient()
+# Initialize backend client with health check interval from settings
+client_settings = UnrealMCPSettings()
+client_settings.health_check_interval = settings.health_check_interval
+unreal_client = UnrealMCPClient(settings=client_settings)
 
-# Cache for tool definitions
-_cached_tools: Optional[Dict[str, Dict[str, Any]]] = None
-
-# Registered tool handlers
-_registered_tools: Dict[str, Callable] = {}
-
-
-# FastMCP requires tools to be registered at module level with @mcp.tool() decorator.
-# We'll create a generic proxy tool that handles all tool calls, and FastMCP will
-# handle the tools/list by returning our cached definitions.
-
-# For now, we'll use a simpler approach: FastMCP's tools/list will be handled
-# by returning cached tools, and tools/call will proxy to backend.
+# Proxy tool definitions loaded from tool_definitions.py
+# These are the proxy's static tool definitions (not backend tools).
+# Used for: compatibility checking, read-only detection, and validation
+# Backend tools are fetched dynamically via unreal_client.get_tools_list()
+_cached_proxy_tool_definitions: Optional[Dict[str, Dict[str, Any]]] = None
 
 
-async def discover_and_register_tools():
-    """Discover tools from backend and register them, comparing with cached definitions.
-    
-    Note: This is called lazily when async initialization happens, not at module load time.
-    """
-    global _cached_tools, _registered_tools
-    
-    logger.info("Starting tool discovery")
-    
-    # Get cached tool definitions
-    cached_tools = get_tool_definitions(enable_markdown_export=settings.enable_markdown_export)
-    _cached_tools = cached_tools
-    
-    # Store tool handlers for reference
-    _registered_tools.clear()
-    for tool_name, tool_def in cached_tools.items():
-        # Store tool definitions for reference
-        _registered_tools[tool_name] = tool_def
-    
-    logger.info(f"Loaded {len(_registered_tools)} tool definitions from cache")
-    
-    # Register all tools with FastMCP
-    register_all_tools()
-    
-    # Try to get tools from backend and compare
+# Compatibility checking helper
+async def check_compatibility_when_online():
+    """Check compatibility when backend comes online."""
+    # Wait a bit for health check to establish connection
+    await asyncio.sleep(1)
     if unreal_client.state == ConnectionState.ONLINE:
-        try:
-            response = await unreal_client.get_tools_list()
-            
-            if "error" in response:
-                logger.warning(f"Backend returned error when listing tools: {response['error']}")
-                logger.info("Using cached tool definitions (offline mode)")
-                return
-            
-            backend_tools = response.get("result", {}).get("tools", [])
-            
-            # Compare each backend tool with cached definition
-            mismatches_found = 0
-            for backend_tool in backend_tools:
-                tool_name = backend_tool.get("name")
-                if not tool_name:
-                    continue
-                
-                cached_tool = cached_tools.get(tool_name)
-                if cached_tool:
-                    differences = compare_tool_definitions(cached_tool, backend_tool)
-                    if differences:
-                        mismatches_found += 1
-                        # Log detailed differences for debugging
-                        import json
-                        # Always log the first mismatch in detail to help debugging
-                        if mismatches_found == 1:
-                            logger.warning(f"=== DETAILED SCHEMA COMPARISON FOR '{tool_name}' ===")
-                            logger.warning(f"Cached inputSchema:\n{json.dumps(cached_tool.get('inputSchema', {}), indent=2, sort_keys=True)}")
-                            logger.warning(f"Backend inputSchema:\n{json.dumps(backend_tool.get('inputSchema', {}), indent=2, sort_keys=True)}")
-                            logger.warning(f"Cached outputSchema:\n{json.dumps(cached_tool.get('outputSchema', {}), indent=2, sort_keys=True)}")
-                            logger.warning(f"Backend outputSchema:\n{json.dumps(backend_tool.get('outputSchema', {}), indent=2, sort_keys=True)}")
-                            logger.warning("=" * 60)
-                        logger.warning(
-                            f"Tool definition mismatch detected for '{tool_name}': "
-                            f"Backend definition differs from cached definition. "
-                            f"Differences: {', '.join(differences)}. "
-                            f"Please update UnrealMCPProxy/src/unreal_mcp_proxy/tool_definitions.py "
-                            f"to match the backend definition."
-                        )
-                else:
-                    logger.warning(
-                        f"Tool '{tool_name}' found in backend but not in cached definitions. "
-                        f"Please add it to tool_definitions.py"
-                    )
-            
-            if mismatches_found == 0:
-                logger.info(f"Tool discovery completed: {len(backend_tools)} tools found, no mismatches")
-            else:
-                logger.warning(f"Tool discovery completed: {len(backend_tools)} tools found, {mismatches_found} mismatches detected")
-            
-        except Exception as e:
-            logger.error(f"Error during tool discovery: {str(e)}", exc_info=True)
-            logger.info("Using cached tool definitions due to error")
-    else:
-        logger.info("Backend is offline, using cached tool definitions")
+        await check_tool_compatibility(unreal_client, _cached_proxy_tool_definitions)
 
 
-# FastMCP automatically handles tools/list by collecting all @mcp.tool() decorated functions.
-# We'll dynamically create tool functions and register them using FastMCP's add_tool method
-# or by using the decorator pattern with dynamic function creation.
-
-# FastMCP requires tools to be registered at module level with @mcp.tool() decorators.
-# For a proxy, we'll create example tools that demonstrate the pattern.
-# In production, we'd need to dynamically register all tools from cache/backend.
-
-# FastMCP automatically collects @mcp.tool() decorated functions for tools/list.
-# For a proxy, we need to ensure tools/list returns our cached definitions.
-# FastMCP's architecture makes dynamic tool registration challenging, so we'll
-# use a hybrid approach:
-# 1. Register a few key tools statically as examples
-# 2. Override tools/list behavior to return cached definitions
-# 3. Handle tools/call to proxy to backend
-
-# Note: FastMCP may not support overriding tools/list directly.
-# We may need to use FastMCP's protocol handlers or extend it.
-# For now, we'll register example tools and ensure the proxy logic works.
-
-# Dynamic tool registration
-# FastMCP requires tools to be registered with @mcp.tool() decorators.
-# FastMCP doesn't support **kwargs, so we need to create functions with explicit parameters.
-def create_tool_handler(tool_name: str, tool_def: Dict[str, Any]):
-    """Create a tool handler function for a specific tool with explicit parameters.
-    
-    This function generates tool handlers that:
-    1. Accept parameters matching the backend schema (with defaults for optional params)
-    2. Apply default values for any missing optional parameters
-    3. Explicitly pass ALL parameters (including defaults) to the backend
-    
-    Architectural Note:
-    The proxy is the authoritative source for the user-facing API. It applies defaults
-    and always sends complete parameter sets to the backend. The backend's defaults serve
-    as a safety net for direct backend calls, but the proxy ensures all values are
-    explicitly provided when forwarding requests.
-    
-    Args:
-        tool_name: Name of the tool
-        tool_def: Tool definition dictionary
-        
-    Returns:
-        Async function that handles the tool call with explicit parameters
-    """
-    import types
-    from typing import get_type_hints
-    
-    # Get input schema properties
-    input_schema = tool_def.get("inputSchema", {})
-    properties = input_schema.get("properties", {})
-    required = input_schema.get("required", [])
-    
-    # Build parameter list and function body
-    # Sort parameters: required first, then optional
-    param_names = list(properties.keys())
-    required_params = [p for p in param_names if p in required]
-    optional_params = [p for p in param_names if p not in required]
-    sorted_param_names = required_params + optional_params
-    
-    # Create parameter string for function signature
-    default_handlers = []  # Store handlers for complex defaults (initialize before if/else)
-    
-    if not sorted_param_names:
-        # No parameters
-        param_str = ""
-        call_args = "{}"
-    else:
-        # Build parameters with Optional types for non-required params
-        params = []
-        call_dict_items = []
-        
-        for param_name in sorted_param_names:
-            param_schema = properties[param_name]
-            param_type = param_schema.get("type", "str")
-            # Map JSON schema types to Python types
-            type_mapping = {
-                "string": "str",
-                "integer": "int",
-                "number": "float",
-                "boolean": "bool",
-                "array": "list",
-                "object": "Dict[str, Any]"
-            }
-            python_type = type_mapping.get(param_type, "Any")
-            
-            # Check if parameter has a default value in the schema
-            schema_default = param_schema.get("default")
-            
-            # Make optional if not required
-            if param_name not in required:
-                # Use schema default if available, otherwise use None
-                if schema_default is not None:
-                    # Convert default to Python literal for function signature
-                    # Note: For complex types (list, dict), we'll use None and handle default in function body
-                    if isinstance(schema_default, str):
-                        default_value = f'"{schema_default}"'
-                        python_type = python_type  # Keep original type, not Optional
-                    elif isinstance(schema_default, bool):
-                        default_value = str(schema_default)
-                        python_type = python_type  # Keep original type, not Optional
-                    elif isinstance(schema_default, (int, float)):
-                        default_value = str(schema_default)
-                        python_type = python_type  # Keep original type, not Optional
-                    elif isinstance(schema_default, list):
-                        # For lists, use None as default and handle in function body
-                        # This avoids issues with mutable defaults in Python
-                        default_value = "None"
-                        python_type = f"Optional[{python_type}]"
-                        # Store default handler - use Python list literal
-                        # Convert list items to proper Python literals
-                        list_items = []
-                        for item in schema_default:
-                            if isinstance(item, str):
-                                list_items.append(f'"{item}"')
-                            else:
-                                list_items.append(str(item))
-                        list_literal = "[" + ", ".join(list_items) + "]"
-                        default_handlers.append(f"    if {param_name} is None:\n        {param_name} = {list_literal}")
-                    elif isinstance(schema_default, dict):
-                        # For dicts, use None as default and handle in function body
-                        default_value = "None"
-                        python_type = f"Optional[{python_type}]"
-                        # Store default handler - use json.loads for dict (safer than string formatting)
-                        dict_json = json.dumps(schema_default)
-                        # Escape single quotes in JSON string for Python string literal
-                        dict_json_escaped = dict_json.replace("'", "\\'")
-                        default_handlers.append(f"    if {param_name} is None:\n        {param_name} = json.loads('{dict_json_escaped}')")
-                    else:
-                        default_value = "None"
-                        python_type = f"Optional[{python_type}]"
-                else:
-                    python_type = f"Optional[{python_type}]"
-                    default_value = "None"
-            else:
-                default_value = None
-            
-            if default_value is not None:
-                params.append(f"{param_name}: {python_type} = {default_value}")
-            else:
-                params.append(f"{param_name}: {python_type}")
-            
-            # Build dictionary for call_tool
-            # IMPORTANT: Include ALL parameters in the call dictionary, even optional ones.
-            # This ensures the proxy explicitly passes all values (including defaults) to the backend,
-            # making the proxy the authoritative source for the API while keeping backend defaults
-            # as a safety net for direct backend calls.
-            call_dict_items.append(f'"{param_name}": {param_name}')
-        
-        param_str = ", ".join(params)
-        call_args = "{" + ", ".join(call_dict_items) + "}"
-    
-    # Create function code with default handlers
-    default_handler_code = "\n".join(default_handlers) if default_handlers else ""
-    if default_handler_code:
-        default_handler_code = "\n" + default_handler_code + "\n"
-    
-    # Check if we need json import (for dict defaults)
-    needs_json_import = any("json.loads" in handler for handler in default_handlers)
-    json_import = "    import json\n" if needs_json_import else ""
-    
-    func_code = f"""
-async def {tool_name}({param_str}) -> Dict[str, Any]:
-    \"\"\"{tool_def.get("description", f"Tool: {tool_name}")}\"\"\"
-{json_import}{default_handler_code}    result = await call_tool("{tool_name}", {call_args})
-    # FastMCP expects a return value, not the MCP result format
-    # Extract the content from the result
-    if result.get("isError"):
-        error_content = result.get("content", [{{}}])[0]
-        error_text = error_content.get("text", "{{}}")
-        try:
-            error_data = json.loads(error_text)
-            raise ValueError(error_data.get("error", "Unknown error"))
-        except json.JSONDecodeError:
-            raise ValueError(error_text)
-    
-    # Parse the content to return structured data
-    content = result.get("content", [{{}}])[0]
-    if content.get("type") == "text":
-        try:
-            parsed_result = json.loads(content.get("text", "{{}}"))
-            # Check if the backend returned bSuccess: false (backend indicates failure this way)
-            if isinstance(parsed_result, dict) and parsed_result.get("bSuccess") is False:
-                error_msg = parsed_result.get("error", "Operation failed")
-                raise ValueError(error_msg)
-            return parsed_result
-        except json.JSONDecodeError:
-            return {{"text": content.get("text", "")}}
-    return result
-"""
-    
-    # Execute the function code
-    # Get the module's globals so the function can access module-level names
-    import sys
-    current_module = sys.modules[__name__]
-    module_globals = current_module.__dict__
-    
-    # Execute in the module's namespace so the function has access to call_tool, json, etc.
-    exec(func_code, module_globals)
-    
-    # Get the function from the module's namespace
-    handler = module_globals[tool_name]
-    
-    return handler
+# Wrapper function for tool calls that provides the necessary context
+async def _call_tool_wrapper(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Wrapper for call_tool that provides context from module-level variables."""
+    return await call_tool(
+        tool_name,
+        arguments,
+        unreal_client,
+        settings,
+        _cached_proxy_tool_definitions,
+        check_compatibility_when_online
+    )
 
 
-def register_all_tools():
-    """Register all tools from cache with FastMCP."""
-    global _cached_tools
-    
-    if _cached_tools is None:
-        logger.warning("No cached tools available for registration")
-        return
-    
-    logger.info(f"Registering {len(_cached_tools)} tools with FastMCP")
-    
-    # Get the current module
-    import sys
-    current_module = sys.modules[__name__]
-    
-    for tool_name, tool_def in _cached_tools.items():
-        # Create the tool handler function
-        # The function signature is generated to match the backend schema exactly,
-        # including default values, so FastMCP will generate correct schemas
-        handler = create_tool_handler(tool_name, tool_def)
-        
-        # Register with FastMCP using the tool decorator
-        # FastMCP will auto-generate schemas from the function signature
-        # Since we've ensured the function signatures match the backend schemas exactly,
-        # the generated schemas should match the backend
-        decorated_handler = mcp.tool()(handler)
-        
-        # Store in module namespace so FastMCP can discover it
-        # FastMCP collects tools at module level, so we add them to the module's __dict__
-        setattr(current_module, tool_name, decorated_handler)
-    
-    logger.info(f"Successfully registered {len(_cached_tools)} tools")
+# Wrapper function for handling tool results
+async def _handle_tool_result_wrapper(tool_name: str, result: Dict[str, Any]) -> Dict[str, Any]:
+    """Wrapper for handle_tool_result."""
+    return await handle_tool_result(tool_name, result)
 
-
-async def call_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-    """Call a tool on the backend server (MCP protocol handler).
-    
-    Args:
-        tool_name: Name of the tool to call
-        arguments: Tool arguments
-    
-    Returns:
-        Tool result with content array
-    """
-    # Ensure async components are initialized (lazy initialization)
-    await ensure_async_initialized()
-    
-    logger.info(f"Tool call requested: {tool_name}")
-    
-    # Check if tool exists in cache (even if offline)
-    if _cached_tools and tool_name not in _cached_tools:
-        logger.warning(f"Tool '{tool_name}' not found in cached definitions")
-        return {
-            "isError": True,
-            "content": [{
-                "type": "text",
-                "text": json.dumps({
-                    "error": f"Tool '{tool_name}' not found"
-                })
-            }]
-        }
-    
-    if unreal_client.state == ConnectionState.OFFLINE:
-        logger.warning(f"Backend unavailable for tool call '{tool_name}'")
-        return {
-            "isError": True,
-            "content": [{
-                "type": "text",
-                "text": json.dumps({
-                    "error": "Unreal MCP server is not available. Please ensure Unreal Editor is running and the UnrealMCPServer plugin is enabled."
-                })
-            }]
-        }
-    
-    try:
-        response = await unreal_client.call_tool(tool_name, arguments)
-        
-        if "error" in response:
-            error = response["error"]
-            logger.error(
-                f"Backend returned error for tool '{tool_name}': "
-                f"code={error.get('code')}, message={error.get('message')}"
-            )
-            return {
-                "isError": True,
-                "content": [{
-                    "type": "text",
-                    "text": json.dumps(error)
-                }]
-            }
-        
-        # Extract result from response
-        result = response.get("result", {})
-        logger.info(f"Tool call '{tool_name}' succeeded")
-        return result
-        
-    except ConnectionError as e:
-        logger.error(f"Connection error calling tool '{tool_name}': {str(e)}", exc_info=True)
-        return {
-            "isError": True,
-            "content": [{
-                "type": "text",
-                "text": json.dumps({
-                    "error": f"Failed to connect to Unreal MCP server: {str(e)}"
-                })
-            }]
-        }
-    except TimeoutError as e:
-        logger.warning(f"Timeout calling tool '{tool_name}' (timeout={settings.backend_timeout}s)")
-        return {
-            "isError": True,
-            "content": [{
-                "type": "text",
-                "text": json.dumps({
-                    "error": f"Request to Unreal MCP server timed out: {str(e)}"
-                })
-            }]
-        }
-    except Exception as e:
-        logger.error(f"Error calling tool '{tool_name}': {str(e)}", exc_info=True)
-        return {
-            "isError": True,
-            "content": [{
-                "type": "text",
-                "text": json.dumps({
-                    "error": f"Failed to call tool: {str(e)}"
-                })
-            }]
-        }
-
-
-# FastMCP protocol handlers
-# Note: FastMCP handles protocol methods automatically. For proxying, we need to register
-# all tools with @mcp.tool() and let FastMCP handle tools/list and tools/call automatically.
-# Protocol methods like initialize, ping, etc. are handled by FastMCP internally.
-
-# For now, we'll register tools and let FastMCP handle the protocol.
-# The proxy behavior will be handled through the tool implementations.
-    """Handle initialize MCP method - proxies to backend or returns proxy capabilities."""
-    if unreal_client.state == ConnectionState.ONLINE:
-        try:
-            params = {"protocolVersion": protocolVersion}
-            if clientInfo:
-                params["clientInfo"] = clientInfo
-            if capabilities:
-                params["capabilities"] = capabilities
-            response = await unreal_client.call_method("initialize", params)
-            if "result" in response:
-                # Cache server capabilities
-                result = response["result"]
-                logger.info(f"Initialized with backend: protocolVersion={result.get('protocolVersion')}, server={result.get('serverInfo', {}).get('name')}")
-                return result
-        except Exception as e:
-            logger.warning(f"Failed to initialize with backend: {str(e)}, using proxy capabilities")
-    
-    # Return proxy capabilities (offline mode)
-    return {
-        "protocolVersion": protocolVersion,  # Use client's requested version
-        "serverInfo": {
-            "name": "unreal-mcp-proxy",
-            "version": "0.1.0"
-        },
-        "capabilities": {
-            "tools": {
-                "listChanged": False,
-                "inputSchema": True,
-                "outputSchema": True
-            },
-            "resources": {
-                "listChanged": False,
-                "subscribe": False
-            },
-            "prompts": {
-                "listChanged": False
-            }
-        }
-    }
-
-
-# Note: FastMCP handles protocol methods (initialize, ping, tools/list, tools/call, etc.) automatically.
-# For tools, we register them with @mcp.tool() and FastMCP handles tools/list and tools/call.
-# FastMCP auto-generates schemas from function signatures, so we must ensure our function signatures
-# match the backend schemas exactly (including default values) to prevent parameter passing issues.
 
 async def start_server():
     """Start the proxy server (for programmatic use)."""
-    # Tools are already registered synchronously at module load time
-    # Async initialization will happen lazily on first tool call
     logger.info(f"UnrealMCPProxy server ready (transport={settings.transport.value})")
     return mcp
 
 
-# Register tools synchronously (before FastMCP starts its event loop)
-# This ensures tools are available immediately, even if backend is offline
-logger.info("Registering tools synchronously...")
-cached_tools = get_tool_definitions(enable_markdown_export=settings.enable_markdown_export)
-_cached_tools = cached_tools
-register_all_tools()
-logger.info(f"Registered {len(_cached_tools)} tools")
+# Static tool functions - all 15 tools hardcoded
+# FastMCP auto-generates schemas from function signatures.
+# These must be kept in sync with backend tool definitions.
 
-# Track if async initialization has been done
-_async_initialized = False
+@mcp.tool(
+    annotations={
+        "title": "Get Project Configuration",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True
+    }
+)
+@read_only
+async def get_project_config() -> Dict[str, Any]:
+    """Retrieve project and engine configuration information including engine version, directory paths (Engine, Project, Content, Log, Saved, Config, Plugins), and other essential project metadata. Use this tool first to understand the project structure before performing asset operations. Returns absolute paths that can be used in other tool calls."""
+    result = await _call_tool_wrapper("get_project_config", {})
+    return await _handle_tool_result_wrapper("get_project_config", result)
 
-async def ensure_async_initialized():
-    """Ensure async components are initialized (lazy initialization)."""
-    global _async_initialized
-    if not _async_initialized:
+@mcp.tool(
+    annotations={
+        "title": "Execute Console Command",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False
+    }
+)
+@write_operation
+async def execute_console_command(command: str) -> Dict[str, Any]:
+    """Execute an Unreal Engine console command and return its output. This allows running any console command available in the Unreal Engine editor. Common commands: 'stat fps' (performance stats), 'showdebug ai' (AI debugging), 'r.SetRes 1920x1080' (set resolution), 'open /Game/Maps/MainLevel' (load level), 'stat unit' (frame timing). Note: Some commands modify editor state. Returns command output as a string. Some commands may return empty strings if they only produce visual output in the editor."""
+    result = await _call_tool_wrapper("execute_console_command", {"command": command})
+    return await _handle_tool_result_wrapper("execute_console_command", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Export Asset",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True
+    }
+)
+@read_only
+async def export_asset(objectPath: str, format: str = DEFAULT_EXPORT_FORMAT) -> Dict[str, Any]:
+    """Export a single UObject to a specified format (defaults to T3D). Exportable asset types include: StaticMesh, Texture2D, Material, Sound, Animation, and most UObject-derived classes. Returns the exported content as a string. T3D format provides human-readable text representation of Unreal objects."""
+    result = await _call_tool_wrapper("export_asset", {"objectPath": objectPath, "format": format})
+    return await _handle_tool_result_wrapper("export_asset", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Get Log File Path",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True
+    }
+)
+@read_only
+async def get_log_file_path() -> Dict[str, Any]:
+    """Returns the absolute path of the Unreal Engine log file. Use this to locate log files for debugging. Log files are plain text and can be read with standard file reading tools. Note: The log file path changes when the editor restarts. Call this tool when you need the current log file location."""
+    result = await _call_tool_wrapper("get_log_file_path", {})
+    return await _handle_tool_result_wrapper("get_log_file_path", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Request Editor Compilation",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False
+    }
+)
+@write_operation
+async def request_editor_compile(timeoutSeconds: float = DEFAULT_COMPILATION_TIMEOUT) -> Dict[str, Any]:
+    """Requests an editor compilation, waits for completion, and returns whether it succeeded or failed along with any build log generated. Use this after modifying C++ source files to recompile code changes without restarting the editor. Only works if the project has C++ code and live coding is enabled in editor settings. Default timeout is 300 seconds (5 minutes). Compilation may take longer for large projects. Returns success status, build log, and extracted errors/warnings. Check the build log for compilation errors if compilation fails."""
+    result = await _call_tool_wrapper("request_editor_compile", {"timeoutSeconds": timeoutSeconds})
+    return await _handle_tool_result_wrapper("request_editor_compile", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Query Asset",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True
+    }
+)
+@read_only
+async def query_asset(assetPath: str, bIncludeTags: bool = False) -> Dict[str, Any]:
+    """Query a single asset to check if it exists and get its basic information from the asset registry. Use this before export_asset or import_asset to verify an asset exists. Faster than export_asset for simple existence checks. Returns asset path, name, class, package path, and optionally tags. Returns error if asset doesn't exist."""
+    result = await _call_tool_wrapper("query_asset", {"assetPath": assetPath, "bIncludeTags": bIncludeTags})
+    return await _handle_tool_result_wrapper("query_asset", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Search Blueprints",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True
+    }
+)
+@read_only
+async def search_blueprints(searchType: str, searchTerm: str, packagePath: Optional[str] = None, bRecursive: bool = True) -> Dict[str, Any]:
+    """Search for Blueprint assets based on various criteria including name patterns, parent classes, and package paths. Returns array of Blueprint asset information including paths, names, parent classes, and match details. Use 'name' searchType to find Blueprints by name pattern (e.g., 'BP_Player*'), 'parent_class' to find Blueprints that inherit from a class (e.g., 'Actor', 'Pawn', 'Character'), or 'all' for comprehensive search across all criteria."""
+    kwargs = {"searchType": searchType, "searchTerm": searchTerm, "bRecursive": bRecursive}
+    if packagePath is not None:
+        kwargs["packagePath"] = packagePath
+    result = await _call_tool_wrapper("search_blueprints", kwargs)
+    return await _handle_tool_result_wrapper("search_blueprints", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Batch Export Assets",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": False
+    }
+)
+@read_only
+async def batch_export_assets(objectPaths: List[str], outputFolder: str, format: str = DEFAULT_EXPORT_FORMAT) -> Dict[str, Any]:
+    """Export multiple assets to files in a specified folder. Returns a list of the exported file paths. Required for Blueprint assets, as export_asset will fail for Blueprints due to response size limitations. Use this when exporting multiple assets of any type. Files are saved to disk at the specified output folder path. Format defaults to T3D. Each asset is exported to a separate file named after the asset. Returns array of successfully exported file paths. Failed exports are not included in the return value. NOTE: For Blueprint graph inspection, use export_blueprint_markdown instead, which is specifically designed for that purpose and provides clearer workflow guidance."""
+    # objectPaths defaults to empty array in backend, but we require it to be provided
+    result = await _call_tool_wrapper("batch_export_assets", {"objectPaths": objectPaths, "outputFolder": outputFolder, "format": format})
+    return await _handle_tool_result_wrapper("batch_export_assets", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Export Class Default",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True
+    }
+)
+@read_only
+async def export_class_default(classPath: str, format: str = DEFAULT_EXPORT_FORMAT) -> Dict[str, Any]:
+    """Export the class default object (CDO) for a given class path. This allows determining default values for a class, since exporting instances of objects do not print values that are identical to the default value. Use this to understand default property values for Unreal classes. Useful for comparing instance values against defaults. Returns T3D format by default, showing all default property values for the class."""
+    result = await _call_tool_wrapper("export_class_default", {"classPath": classPath, "format": format})
+    return await _handle_tool_result_wrapper("export_class_default", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Import Asset",
+        "readOnlyHint": False,
+        "destructiveHint": True,
+        "idempotentHint": False
+    }
+)
+@write_operation
+async def import_asset(packagePath: str, classPath: str, filePath: Optional[str] = None, t3dFilePath: Optional[str] = None) -> Dict[str, Any]:
+    """Import a file to create or update a UObject. The file type is automatically detected based on available factories. Import binary files (textures, meshes, sounds) or T3D files to create/update Unreal assets. Supported binary formats: .fbx, .obj (meshes), .png, .jpg, .tga (textures), .wav, .mp3 (sounds). T3D files can be used to import from T3D format or to configure imported objects. If asset exists at packagePath, it will be updated. Otherwise, a new asset is created. At least one of filePath (binary) or t3dFilePath (T3D) must be provided."""
+    kwargs = {"packagePath": packagePath, "classPath": classPath}
+    if filePath is not None:
+        kwargs["filePath"] = filePath
+    if t3dFilePath is not None:
+        kwargs["t3dFilePath"] = t3dFilePath
+    result = await _call_tool_wrapper("import_asset", kwargs)
+    return await _handle_tool_result_wrapper("import_asset", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Search Assets",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True
+    }
+)
+@read_only
+async def search_assets(packagePaths: List[str], packageNames: List[str], classPaths: List[str] = None, bRecursive: bool = True, bIncludeTags: bool = False) -> Dict[str, Any]:
+    """Search for assets by package paths or package names, optionally filtered by class. Returns an array of asset information from the asset registry. More flexible than search_blueprints as it works with all asset types. REQUIRED: At least one of 'packagePaths' or 'packageNames' must be a non-empty array. Use packagePaths to search directories (e.g., '/Game/Blueprints' searches all assets in that folder), packageNames for exact package matches, and classPaths to filter by asset type (e.g., textures only). Returns array of asset information. Use bIncludeTags=true to get additional metadata tags. WARNING: Searching '/Game/' directory without class filters is extremely expensive and not allowed. Always provide at least one class filter when searching large directories."""
+    # Apply default for optional classPaths
+    if classPaths is None:
+        classPaths = []
+    # Backend validates that at least one of packagePaths or packageNames is non-empty
+    result = await _call_tool_wrapper("search_assets", {"packagePaths": packagePaths, "packageNames": packageNames, "classPaths": classPaths, "bRecursive": bRecursive, "bIncludeTags": bIncludeTags})
+    return await _handle_tool_result_wrapper("search_assets", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Get Asset Dependencies",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True
+    }
+)
+@read_only
+async def get_asset_dependencies(assetPath: str, bIncludeHardDependencies: bool = True, bIncludeSoftDependencies: bool = False) -> Dict[str, Any]:
+    """Get all assets that a specified asset depends on. Returns an array of asset paths that the specified asset depends on. Use this to understand what assets an asset requires, which is useful for impact analysis, refactoring safety, and understanding asset relationships. Very useful when doing asset searches and queries with existing tools. Supports both hard dependencies (direct references) and soft dependencies (searchable references)."""
+    result = await _call_tool_wrapper("get_asset_dependencies", {"assetPath": assetPath, "bIncludeHardDependencies": bIncludeHardDependencies, "bIncludeSoftDependencies": bIncludeSoftDependencies})
+    return await _handle_tool_result_wrapper("get_asset_dependencies", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Get Asset References",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True
+    }
+)
+@read_only
+async def get_asset_references(assetPath: str, bIncludeHardReferences: bool = True, bIncludeSoftReferences: bool = False) -> Dict[str, Any]:
+    """Get all assets that reference a specified asset. Returns an array of asset paths that reference the specified asset. Use this to understand what assets depend on this asset, which is critical for impact analysis, refactoring safety, and unused asset detection. Very useful when doing asset searches and queries with existing tools. Supports both hard references (direct references) and soft references (searchable references)."""
+    result = await _call_tool_wrapper("get_asset_references", {"assetPath": assetPath, "bIncludeHardReferences": bIncludeHardReferences, "bIncludeSoftReferences": bIncludeSoftReferences})
+    return await _handle_tool_result_wrapper("get_asset_references", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Get Asset Dependency Tree",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True
+    }
+)
+@read_only
+async def get_asset_dependency_tree(assetPath: str, maxDepth: int = 10, bIncludeHardDependencies: bool = True, bIncludeSoftDependencies: bool = False) -> Dict[str, Any]:
+    """Get the complete dependency tree for a specified asset. Returns a recursive tree structure showing all dependencies and their dependencies. Use this for complete dependency mapping and recursive analysis. The tree includes depth information for each node. Very useful when doing asset searches and queries with existing tools. Supports both hard dependencies (direct references) and soft dependencies (searchable references). Use maxDepth to limit recursion depth and prevent infinite loops."""
+    result = await _call_tool_wrapper("get_asset_dependency_tree", {"assetPath": assetPath, "maxDepth": maxDepth, "bIncludeHardDependencies": bIncludeHardDependencies, "bIncludeSoftDependencies": bIncludeSoftDependencies})
+    return await _handle_tool_result_wrapper("get_asset_dependency_tree", result)
+
+@mcp.tool(
+    annotations={
+        "title": "Export Blueprint Markdown",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": False
+    }
+)
+@read_only
+async def export_blueprint_markdown(blueprintPaths: List[str], outputFolder: str) -> Dict[str, Any]:
+    """Export Blueprint asset(s) to markdown format for graph inspection. This is the recommended method for inspecting Blueprint graph structure, as Blueprint exports are too large to return directly in responses. The markdown export provides complete Blueprint graph information including nodes, variables, functions, and events. Files are saved to disk at the specified output folder path. Each Blueprint is exported to a separate markdown file named after the asset. Returns array of successfully exported file paths."""
+    # blueprintPaths defaults to empty array in backend, but we require it to be provided
+    result = await _call_tool_wrapper("export_blueprint_markdown", {"blueprintPaths": blueprintPaths, "outputFolder": outputFolder})
+    return await _handle_tool_result_wrapper("export_blueprint_markdown", result)
+
+# Resource handlers - forward to backend with offline caching
+# FastMCP resources use URI templates, so we register handlers for the backend's resource templates
+# These handlers forward to backend when online, and use cached definitions when offline
+
+@mcp.resource("unreal+t3d://{filepath}")
+async def read_t3d_resource(filepath: str) -> str:
+    """Read T3D Blueprint resource from backend.
+    
+    Args:
+        filepath: The Blueprint file path (e.g., '/Game/MyBlueprint')
+    
+    Returns:
+        T3D content as string
+    """
+    uri = f"unreal+t3d://{filepath}"
+    if unreal_client.state == ConnectionState.OFFLINE:
+        logger.warning(f"Backend unavailable for resource: {uri}")
+        return "Unreal MCP server is not available. Please ensure Unreal Editor is running and the UnrealMCPServer plugin is enabled."
+    
+    try:
+        response = await unreal_client.read_resource(uri)
+        if "error" in response:
+            error = response["error"]
+            logger.error(f"Backend returned error for resource {uri}: {error}")
+            return f"Error: {error.get('message', 'Unknown error')}"
+        
+        result = response.get("result", {})
+        contents = result.get("contents", [])
+        if contents and len(contents) > 0:
+            return contents[0].get("text", "")
+        return "Resource content not available"
+    except Exception as e:
+        logger.error(f"Error reading resource {uri}: {str(e)}", exc_info=True)
+        return f"Error reading resource: {str(e)}"
+
+# Conditionally register markdown resource handler based on enable_markdown_export setting
+if settings.enable_markdown_export:
+    @mcp.resource("unreal+md://{filepath}")
+    async def read_markdown_resource(filepath: str) -> str:
+        """Read Markdown Blueprint summary resource from backend.
+        
+        Args:
+            filepath: The Blueprint file path (e.g., '/Game/MyBlueprint')
+        
+        Returns:
+            Markdown content as string
+        """
+        uri = f"unreal+md://{filepath}"
+        if unreal_client.state == ConnectionState.OFFLINE:
+            logger.warning(f"Backend unavailable for resource: {uri}")
+            return "Unreal MCP server is not available. Please ensure Unreal Editor is running and the UnrealMCPServer plugin is enabled."
+        
         try:
-            # Check if we're in an event loop (FastMCP's event loop)
-            loop = asyncio.get_running_loop()
-            logger.info("FastMCP event loop detected: initializing async components")
-            await unreal_client.initialize_async()
-            await discover_and_register_tools()
-            _async_initialized = True
-            logger.info("Async initialization complete")
-        except RuntimeError:
-            # No event loop running yet, will initialize later
-            logger.debug("No event loop running yet, will initialize on first async call")
+            response = await unreal_client.read_resource(uri)
+            if "error" in response:
+                error = response["error"]
+                logger.error(f"Backend returned error for resource {uri}: {error}")
+                return f"Error: {error.get('message', 'Unknown error')}"
+            
+            result = response.get("result", {})
+            contents = result.get("contents", [])
+            if contents and len(contents) > 0:
+                return contents[0].get("text", "")
+            return "Resource content not available"
+        except Exception as e:
+            logger.error(f"Error reading resource {uri}: {str(e)}", exc_info=True)
+            return f"Error reading resource: {str(e)}"
+
+# Resource and Prompt list handlers - forward to backend with offline fallback
+# FastMCP automatically handles resources/list and prompts/list from registered resources/prompts,
+# but we need to intercept these to provide forwarding with offline caching
+
+async def _get_resources_list_forward(cursor: Optional[str] = None) -> Dict[str, Any]:
+    """Get resources list, forwarding to backend when online, using cache when offline."""
+    if unreal_client.state == ConnectionState.ONLINE:
+        try:
+            response = await unreal_client.get_resources_list(cursor)
+            if "error" not in response:
+                return response.get("result", {"resources": [], "nextCursor": ""})
+        except Exception as e:
+            logger.warning(f"Error getting resources from backend, using cache: {str(e)}")
+    
+    # Use cached definitions when offline or on error
+    cached = get_cached_resource_definitions()
+    return {
+        "resources": cached.get("resources", []),
+        "nextCursor": ""
+    }
+
+async def _get_resource_templates_list_forward(cursor: Optional[str] = None) -> Dict[str, Any]:
+    """Get resource templates list, forwarding to backend when online, using cache when offline."""
+    if unreal_client.state == ConnectionState.ONLINE:
+        try:
+            response = await unreal_client.get_resource_templates_list(cursor)
+            if "error" not in response:
+                return response.get("result", {"resourceTemplates": [], "nextCursor": ""})
+        except Exception as e:
+            logger.warning(f"Error getting resource templates from backend, using cache: {str(e)}")
+    
+    # Use cached definitions when offline or on error
+    cached = get_cached_resource_definitions()
+    return {
+        "resourceTemplates": cached.get("resourceTemplates", []),
+        "nextCursor": ""
+    }
+
+# Prompt handlers - fully static (like tools)
+# Prompts are just text templates, so they can be fully implemented statically
+# No backend connection required - prompts work completely offline
+
+@mcp.prompt()
+def analyze_blueprint(blueprint_path: str, focus_areas: str = "all") -> List[Dict[str, Any]]:
+    """Analyze a Blueprint's structure, functionality, and design patterns.
+    
+    Provides comprehensive analysis including variables, functions, events, graph structure,
+    design patterns, dependencies, potential issues, and improvement suggestions.
+    
+    Args:
+        blueprint_path: The path to the Blueprint asset (e.g., '/Game/Blueprints/BP_Player')
+        focus_areas: Comma-separated list of areas to focus on: 'variables', 'functions', 'events', 'graph', 'design', or 'all' (default: 'all')
+    
+    Returns:
+        List of prompt messages for LLM interaction
+    """
+    return generate_prompt_messages("analyze_blueprint", {
+        "blueprint_path": blueprint_path,
+        "focus_areas": focus_areas
+    })
+
+@mcp.prompt()
+def refactor_blueprint(blueprint_path: str, refactor_goal: str) -> List[Dict[str, Any]]:
+    """Generate a refactoring plan for a Blueprint.
+    
+    Provides current state analysis, refactoring strategy, step-by-step plan,
+    breaking changes, testing plan, and migration guide.
+    
+    Args:
+        blueprint_path: The path to the Blueprint asset
+        refactor_goal: The goal of the refactoring (e.g., 'improve performance', 'add new feature', 'simplify structure')
+    
+    Returns:
+        List of prompt messages for LLM interaction
+    """
+    return generate_prompt_messages("refactor_blueprint", {
+        "blueprint_path": blueprint_path,
+        "refactor_goal": refactor_goal
+    })
+
+@mcp.prompt()
+def audit_assets(asset_paths: str, audit_type: str = "dependencies") -> List[Dict[str, Any]]:
+    """Audit project assets for dependencies, references, or issues.
+    
+    Provides asset inventory, dependency analysis, reference analysis, unused assets,
+    orphaned assets, circular dependencies, and recommendations.
+    
+    Args:
+        asset_paths: Comma-separated list of asset paths to audit
+        audit_type: Type of audit: 'dependencies', 'references', 'unused', 'orphaned', or 'all' (default: 'dependencies')
+    
+    Returns:
+        List of prompt messages for LLM interaction
+    """
+    return generate_prompt_messages("audit_assets", {
+        "asset_paths": asset_paths,
+        "audit_type": audit_type
+    })
+
+@mcp.prompt()
+def create_blueprint(blueprint_name: str, parent_class: str, description: str) -> List[Dict[str, Any]]:
+    """Generate a design plan for creating a new Blueprint.
+    
+    Provides Blueprint structure, component requirements, initialization logic,
+    core functionality, event handlers, dependencies, implementation steps, and testing checklist.
+    
+    Args:
+        blueprint_name: Name for the new Blueprint (e.g., 'BP_PlayerController')
+        parent_class: Parent class to inherit from (e.g., 'PlayerController', 'Actor', 'Pawn')
+        description: Description of what the Blueprint should do
+    
+    Returns:
+        List of prompt messages for LLM interaction
+    """
+    return generate_prompt_messages("create_blueprint", {
+        "blueprint_name": blueprint_name,
+        "parent_class": parent_class,
+        "description": description
+    })
+
+@mcp.prompt()
+def analyze_performance(blueprint_path: str) -> List[Dict[str, Any]]:
+    """Analyze the performance characteristics of a Blueprint.
+    
+    Identifies performance hotspots, tick analysis, memory usage, event frequency,
+    optimization opportunities, best practices, and profiling recommendations.
+    
+    Args:
+        blueprint_path: The path to the Blueprint asset
+    
+    Returns:
+        List of prompt messages for LLM interaction
+    """
+    return generate_prompt_messages("analyze_performance", {
+        "blueprint_path": blueprint_path
+    })
+
+# Load proxy tool definitions for compatibility checking and read-only detection
+# This happens at module load time so tool definitions are available immediately
+logger.info("Loading proxy tool definitions...")
+_cached_proxy_tool_definitions = get_tool_definitions(enable_markdown_export=settings.enable_markdown_export)
+logger.info(f"Loaded {len(_cached_proxy_tool_definitions)} proxy tool definitions")
+
+# Initialize proxy components (health check, compatibility checking)
+# This is done lazily on first tool call if event loop is not available at module load time
+async def _initialize_proxy_components():
+    """Initialize proxy components when event loop is available."""
+    await initialize_proxy(settings, unreal_client, _cached_proxy_tool_definitions)
 
 if __name__ == "__main__":
-    # Start the MCP server
-    # FastMCP will create its own event loop
-    # Async initialization (health check) will happen lazily on first tool call
     logger.info(f"Starting UnrealMCPProxy server (transport={settings.transport.value})")
+    
+    # Note: Proxy initialization will happen automatically on first tool call
+    # when the event loop is available. This avoids event loop conflicts with FastMCP.
+    # FastMCP will create and manage the event loop when mcp.run() is called.
     
     # Prepare run parameters based on transport
     run_kwargs = {"transport": settings.transport.value}
@@ -652,4 +575,3 @@ if __name__ == "__main__":
         run_kwargs["stateless_http"] = True
     
     mcp.run(**run_kwargs)
-

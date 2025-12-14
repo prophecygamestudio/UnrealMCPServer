@@ -3,3 +3,14 @@ Intermediate
 Saved
 __pycache__/
 UnrealMCPProxy/uv.lock
+
+# UnrealMCPProxy - pytest and Python artifacts
+UnrealMCPProxy/.pytest_cache/
+UnrealMCPProxy/**/.pytest_cache/
+UnrealMCPProxy/.coverage
+UnrealMCPProxy/.coverage.*
+UnrealMCPProxy/htmlcov/
+UnrealMCPProxy/*.cover
+UnrealMCPProxy/.mypy_cache/
+UnrealMCPProxy/.ruff_cache/
+UnrealMCPProxy/.venv/

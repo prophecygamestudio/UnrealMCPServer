@@ -137,6 +137,43 @@ This plugin allows external applications, particularly AI agents, to query and m
     *   `UMCP_BlueprintTools.h` - Blueprint tool parameter and result types
 *   **HTTP Transport:** Uses Unreal Engine's `FHttpServerModule` for HTTP handling
 
+## UnrealMCPProxy
+
+This project includes **UnrealMCPProxy**, a Python-based MCP proxy server that provides:
+
+*   **Always-Alive Availability**: The proxy remains available even when the Unreal Editor restarts, providing continuous MCP service
+*   **Robust MCP Presentation**: Uses FastMCP library for well-known, standardized MCP protocol implementation
+*   **Offline Tool Lists**: Can provide tool definitions even when the backend is offline
+*   **Enhanced Error Handling**: Provides graceful error handling and retry logic for read-only operations
+
+### Proxy Maintenance Requirements
+
+**CRITICAL: The UnrealMCPProxy MUST be kept synchronized with the backend.**
+
+When you modify tools, descriptions, parameters, or schemas in the UnrealMCPServer plugin, you **MUST** also update the corresponding tool definitions in the UnrealMCPProxy. This ensures:
+
+*   The proxy can provide accurate tool lists when the backend is offline
+*   Tool calls are properly forwarded with correct parameter schemas
+*   Clients receive consistent tool definitions regardless of backend availability
+
+### How to Update the Proxy
+
+1. **Identify the affected tool domain** (Common, Asset, or Blueprint)
+2. **Update the corresponding file** in `UnrealMCPProxy/src/unreal_mcp_proxy/`:
+   - Common Tools → `tool_definitions_common.py`
+   - Asset Tools → `tool_definitions_asset.py`
+   - Blueprint Tools → `tool_definitions_blueprint.py`
+3. **Run the test suite** to verify schema compatibility:
+   ```bash
+   cd UnrealMCPProxy
+   uv --directory . run test_proxy.py
+   ```
+4. **Verify offline tool listing** works correctly
+
+See `.cursorrules` and `docs/SCHEMA_SYNCHRONIZATION_GUIDE.md` for detailed requirements and best practices.
+
+**Important**: The proxy's tool definitions must be **compatible** with the backend schemas (all required fields present, compatible types), but can have improved descriptions, simplified types, and better defaults.
+
 ## Repository Structure
 
 *   `Source/`: Contains the C++ source code for the plugin.
@@ -176,7 +213,7 @@ Add the following section to your project's rules or documentation:
 
 When working with T3D (Unreal Text File) format files for asset export, import, or analysis, refer to the **T3D File Format Specification** document.
 
-**Reference:** See `Plugins/UnrealMCPServer/.cursor/docs/T3D_FORMAT_SPECIFICATION.md` for complete T3D format documentation, including:
+**Reference:** See `docs/T3D_FORMAT_SPECIFICATION.md` for complete T3D format documentation, including:
 
 - File structure and syntax
 
@@ -211,7 +248,7 @@ This reference helps ensure that when AI agents or developers interact with T3D 
 ## Documentation
 
 For detailed technical documentation, see:
-*   `.cursor/notes/MCP_HTTP_Implementation_TechSpec.md` - Technical specification and implementation details
+*   `docs/MCP_HTTP_Implementation_TechSpec.md` - Technical specification and implementation details
 
 ## Contributing
 

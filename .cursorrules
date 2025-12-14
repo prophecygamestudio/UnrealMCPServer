@@ -7,16 +7,16 @@
 
 This ensures the proxy can return accurate tool lists even when the Unreal Editor is offline.
 
-### Schema Synchronization Guide
+### Schema Compatibility Guide
 
-**IMPORTANT: See `UnrealMCPProxy/SCHEMA_SYNCHRONIZATION_GUIDE.md` for comprehensive best practices and common pitfalls.**
+**IMPORTANT: See `docs/SCHEMA_SYNCHRONIZATION_GUIDE.md` for comprehensive best practices and compatibility requirements.**
 
 Key points:
 - **Always run the test suite** before committing: `uv --directory UnrealMCPProxy run test_proxy.py`
-- **Match schemas exactly**: types, defaults, required fields, descriptions must match the backend
-- **Update both sides together**: backend changes and proxy changes in the same commit
-- **Use test output**: The test suite shows detailed differences when mismatches are detected
-- **Common pitfalls**: Wrong default types (300 vs 300.0), missing array defaults, expanding nested objects, adding descriptions that don't exist
+- **Ensure schema compatibility**: All required backend fields must be present, types must be compatible
+- **Proxy can improve schemas**: Better descriptions, simplified types, better defaults are allowed
+- **Use test output**: The test suite shows compatibility issues (missing required fields, type mismatches)
+- **Common issues**: Missing required fields, type incompatibilities, field name mismatches
 
 ### Coordination Requirements
 
@@ -32,9 +32,10 @@ Key points:
    - Test that the proxy can list the tool when backend is offline
 
 3. **Parameter Schema Changes**
-   - If you modify input/output schemas (USTRUCT definitions)
-   - You MUST update the corresponding JSON schemas in the proxy
-   - Ensure parameter descriptions match between plugin and proxy
+   - If you modify input/output schemas (USTRUCT definitions) in the backend
+   - You MUST update the corresponding JSON schemas in the proxy to ensure compatibility
+   - Proxy must include all required fields from backend
+   - Proxy can have improved descriptions, simplified types, and better defaults
 
 4. **Conditional Features**
    - Tools with conditional features (e.g., markdown export support) must be configurable via proxy environment variables
@@ -75,7 +76,11 @@ uv run test_proxy.py  # Missing --directory flag
 - `Source/UnrealMCPServer/Public/UMCP_BlueprintTools.h`
 
 **UnrealMCPProxy:**
-- `UnrealMCPProxy/src/unreal_mcp_proxy/tool_definitions.py` (or equivalent)
+- `UnrealMCPProxy/src/unreal_mcp_proxy/tool_definitions.py` (main aggregator)
+- `UnrealMCPProxy/src/unreal_mcp_proxy/tool_definitions_common.py` (Common Tools)
+- `UnrealMCPProxy/src/unreal_mcp_proxy/tool_definitions_asset.py` (Asset Tools)
+- `UnrealMCPProxy/src/unreal_mcp_proxy/tool_definitions_blueprint.py` (Blueprint Tools)
+- `UnrealMCPProxy/src/unreal_mcp_proxy/tool_definitions_helpers.py` (Helper functions)
 - `UnrealMCPProxy/.env.example` (for conditional feature flags)
 
 ### Conditional Features
@@ -91,21 +96,135 @@ Tools with conditional features must be configurable via environment variables:
 
 Before committing changes that affect tool definitions:
 
-- [ ] Updated tool definition in UnrealMCPServer plugin
-- [ ] Updated corresponding tool definition in UnrealMCPProxy
+- [ ] Updated tool definition in UnrealMCPServer plugin (if backend changed)
+- [ ] Updated corresponding tool definition in UnrealMCPProxy (if backend changed or to improve)
 - [ ] Updated `.env.example` if conditional features were added/modified
 - [ ] **Tests run using `uv --directory UnrealMCPProxy run test_proxy.py` (not `python test_proxy.py`)**
-- [ ] **Schema comparison shows 0 mismatches** (all tools match backend)
+- [ ] **Schema compatibility check shows 0 issues** (all tools compatible with backend)
 - [ ] Tested proxy can list tools when backend is offline
 - [ ] Verified conditional features work correctly with environment variables
 - [ ] Updated documentation if tool behavior changed
-- [ ] **Reviewed `SCHEMA_SYNCHRONIZATION_GUIDE.md` for any relevant pitfalls**
+- [ ] **Reviewed `docs/SCHEMA_SYNCHRONIZATION_GUIDE.md` for compatibility requirements**
 
 ### Tool Definition Format
 
-Tool definitions in the proxy should match the structure returned by the backend's `tools/list` method, including:
+Tool definitions in the proxy should be **compatible** with the backend's `tools/list` method, including:
 - `name`: Tool name (must match exactly)
-- `description`: Full description (may include conditional text)
-- `inputSchema`: JSON schema for parameters
-- `outputSchema`: JSON schema for results (if applicable)
+- `description`: Full description (can be improved/better than backend, may include conditional text)
+- `inputSchema`: JSON schema for parameters (must include all required backend fields, types must be compatible)
+- `outputSchema`: JSON schema for results (if applicable, can be improved)
+
+**Note**: Proxy schemas don't need to exactly match backend schemas. They must be compatible (required fields present, types compatible), but can have better descriptions, simplified types, and improved defaults.
+
+## Proxy Maintenance Requirements
+
+### Critical: Keep Proxy Synchronized with Backend
+
+**The UnrealMCPProxy MUST be kept up to date whenever the backend changes.** The proxy serves as an always-alive version of the backend and provides more robust presentation of MCP features via a well-known MCP library (FastMCP). If the proxy falls out of sync with the backend, it will fail to properly forward requests and may provide incorrect tool definitions to clients.
+
+### When to Update the Proxy
+
+You MUST update the proxy when making any of the following changes to the backend:
+
+1. **Adding a new tool** - Add the tool definition to the appropriate domain file:
+   - Common Tools → `tool_definitions_common.py`
+   - Asset Tools → `tool_definitions_asset.py`
+   - Blueprint Tools → `tool_definitions_blueprint.py`
+
+2. **Modifying tool descriptions** - Update the description in the corresponding domain file
+
+3. **Changing tool parameters** - Update the `inputSchema` in the corresponding domain file to maintain compatibility
+
+4. **Changing tool return types** - Update the `outputSchema` in the corresponding domain file
+
+5. **Adding or modifying conditional features** - Update the helper functions and domain files as needed
+
+### How to Update the Proxy
+
+Follow this workflow when updating the proxy:
+
+1. **Identify the affected domain**:
+   - Determine which tool domain the change affects (Common, Asset, or Blueprint)
+   - Locate the corresponding file in `UnrealMCPProxy/src/unreal_mcp_proxy/`
+
+2. **Update the tool definition**:
+   - For new tools: Add a complete tool definition with `name`, `description`, `inputSchema`, and `outputSchema`
+   - For existing tools: Update the relevant fields while maintaining schema compatibility
+   - Ensure all required backend fields are present in the proxy schema
+   - Types must be compatible (e.g., `number` and `integer` are compatible)
+
+3. **Run the test suite**:
+   ```bash
+   cd UnrealMCPProxy
+   uv --directory . run test_proxy.py
+   ```
+   - This will verify schema compatibility
+   - Fix any compatibility issues reported by the tests
+
+4. **Verify offline tool listing**:
+   - Ensure the proxy can list tools when the backend is offline
+   - Test that the new/updated tool appears in the tool list
+
+5. **Update documentation** (if needed):
+   - Update `UnrealMCPProxy/README.md` if tool behavior changed significantly
+   - Update `.env.example` if conditional features were added/modified
+
+### Proxy Tool Definition Structure
+
+The proxy's tool definitions are organized by domain:
+
+- **`tool_definitions.py`**: Main aggregator that imports and combines all domain-specific tools
+- **`tool_definitions_common.py`**: Common Tools (e.g., `get_project_config`, `execute_console_command`)
+- **`tool_definitions_asset.py`**: Asset Tools (e.g., `export_asset`, `search_assets`)
+- **`tool_definitions_blueprint.py`**: Blueprint Tools (e.g., `search_blueprints`, `export_blueprint_markdown`)
+- **`tool_definitions_helpers.py`**: Helper functions for shared functionality (e.g., markdown export support)
+
+When adding or modifying tools, update the appropriate domain file. The main `tool_definitions.py` will automatically include your changes.
+
+### Schema Compatibility Requirements
+
+When updating proxy tool definitions, ensure:
+
+- **All required backend fields are present** - Missing required fields will cause tool calls to fail
+- **Field types are compatible** - `number`/`integer`, `string`/`enum`, etc. must be compatible
+- **Property names match** - Required field names must match the backend exactly
+- **Descriptions can be improved** - Proxy descriptions can be better than backend descriptions
+- **Defaults can be improved** - Proxy can provide better default values than the backend
+
+See `docs/SCHEMA_SYNCHRONIZATION_GUIDE.md` for detailed compatibility requirements and examples.
+
+### Testing Proxy Updates
+
+Before committing proxy updates:
+
+1. **Run the test suite**: `uv --directory UnrealMCPProxy run test_proxy.py`
+2. **Check schema compatibility**: The test suite will report any compatibility issues
+3. **Test offline tool listing**: Verify tools can be listed when backend is offline
+4. **Test tool calls**: If backend is available, test that tool calls work correctly
+
+### Common Update Scenarios
+
+**Adding a new tool:**
+1. Add tool implementation to backend (e.g., `UMCP_CommonTools.cpp`)
+2. Add tool definition to appropriate proxy domain file
+3. Run test suite to verify compatibility
+4. Test tool listing and tool calls
+
+**Modifying tool parameters:**
+1. Update USTRUCT in backend header file
+2. Update `inputSchema` in corresponding proxy domain file
+3. Ensure all required fields from backend are present
+4. Run test suite to verify compatibility
+
+**Changing tool descriptions:**
+1. Update description in backend tool registration
+2. Update description in corresponding proxy domain file
+3. Run test suite (descriptions don't affect compatibility, but good to verify)
+
+**Adding conditional features:**
+1. Add conditional logic to backend (if needed)
+2. Add environment variable to `.env.example`
+3. Update helper functions in `tool_definitions_helpers.py`
+4. Update tool definitions in domain files to use conditional text
+5. Run test suite and test with feature enabled/disabled
 

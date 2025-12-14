@@ -1,0 +1,95 @@
+{
+  "prompts": [
+    {
+      "name": "analyze_blueprint",
+      "title": "Analyze Blueprint",
+      "description": "Analyze a Blueprint's structure, functionality, and design patterns. Provides comprehensive analysis including variables, functions, events, graph structure, design patterns, dependencies, potential issues, and improvement suggestions.",
+      "arguments": [
+        {
+          "name": "blueprint_path",
+          "description": "The path to the Blueprint asset (e.g., '/Game/Blueprints/BP_Player')",
+          "required": true
+        },
+        {
+          "name": "focus_areas",
+          "description": "Comma-separated list of areas to focus on: 'variables', 'functions', 'events', 'graph', 'design', or 'all' (default: 'all')",
+          "required": false
+        }
+      ],
+      "template": "Analyze the Blueprint at path '{blueprint_path}' and provide a comprehensive analysis.\n\nFocus Areas: {focus_areas}\n\nPlease provide:\n1. **Overview**: High-level description of what this Blueprint does\n2. **Variables**: List and explain all variables, their types, and purposes\n3. **Functions**: Document all custom functions, their parameters, return values, and logic\n4. **Events**: Identify all event handlers (BeginPlay, Tick, etc.) and their purposes\n5. **Graph Structure**: Describe the overall flow and key connections in the Blueprint graph\n6. **Design Patterns**: Identify any design patterns used (e.g., State Machine, Component Pattern)\n7. **Dependencies**: List assets and classes this Blueprint depends on\n8. **Potential Issues**: Identify any potential bugs, performance issues, or design concerns\n9. **Suggestions**: Provide recommendations for improvements or best practices\n\nUse the export_blueprint_markdown tool to get the full Blueprint structure, then analyze it thoroughly."
+    },
+    {
+      "name": "refactor_blueprint",
+      "title": "Refactor Blueprint",
+      "description": "Generate a refactoring plan for a Blueprint. Provides current state analysis, refactoring strategy, step-by-step plan, breaking changes, testing plan, and migration guide.",
+      "arguments": [
+        {
+          "name": "blueprint_path",
+          "description": "The path to the Blueprint asset",
+          "required": true
+        },
+        {
+          "name": "refactor_goal",
+          "description": "The goal of the refactoring (e.g., 'improve performance', 'add new feature', 'simplify structure')",
+          "required": true
+        }
+      ],
+      "template": "Create a refactoring plan for the Blueprint at '{blueprint_path}'.\n\nRefactoring Goal: {refactor_goal}\n\nPlease provide:\n1. **Current State Analysis**: Analyze the current Blueprint structure\n2. **Refactoring Strategy**: Outline the approach to achieve the goal\n3. **Step-by-Step Plan**: Detailed steps for the refactoring\n4. **Breaking Changes**: Identify any breaking changes that might affect other assets\n5. **Testing Plan**: Suggest how to test the refactored Blueprint\n6. **Migration Guide**: If applicable, provide a guide for migrating dependent assets\n\nUse the export_blueprint_markdown tool to examine the current Blueprint structure."
+    },
+    {
+      "name": "audit_assets",
+      "title": "Audit Assets",
+      "description": "Audit project assets for dependencies, references, or issues. Provides asset inventory, dependency analysis, reference analysis, unused assets, orphaned assets, circular dependencies, and recommendations.",
+      "arguments": [
+        {
+          "name": "asset_paths",
+          "description": "Comma-separated list of asset paths to audit",
+          "required": true
+        },
+        {
+          "name": "audit_type",
+          "description": "Type of audit: 'dependencies', 'references', 'unused', 'orphaned', or 'all' (default: 'dependencies')",
+          "required": false
+        }
+      ],
+      "template": "Audit the following assets: {asset_paths}\n\nAudit Type: {audit_type}\n\nPlease provide:\n1. **Asset Inventory**: List all assets and their basic information\n2. **Dependency Analysis**: Map dependencies between assets (use get_asset_dependencies tool)\n3. **Reference Analysis**: Identify what references each asset (use get_asset_references tool)\n4. **Unused Assets**: Identify assets that are not referenced by any other asset\n5. **Orphaned Assets**: Find assets with broken or missing dependencies\n6. **Circular Dependencies**: Detect any circular dependency chains\n7. **Recommendations**: Suggest optimizations, cleanup opportunities, or restructuring\n\nUse the search_assets, get_asset_dependencies, and get_asset_references tools to gather information."
+    },
+    {
+      "name": "create_blueprint",
+      "title": "Create Blueprint",
+      "description": "Generate a design plan for creating a new Blueprint. Provides Blueprint structure, component requirements, initialization logic, core functionality, event handlers, dependencies, implementation steps, and testing checklist.",
+      "arguments": [
+        {
+          "name": "blueprint_name",
+          "description": "Name for the new Blueprint (e.g., 'BP_PlayerController')",
+          "required": true
+        },
+        {
+          "name": "parent_class",
+          "description": "Parent class to inherit from (e.g., 'PlayerController', 'Actor', 'Pawn')",
+          "required": true
+        },
+        {
+          "name": "description",
+          "description": "Description of what the Blueprint should do",
+          "required": true
+        }
+      ],
+      "template": "Create a design plan for a new Blueprint named '{blueprint_name}' that inherits from '{parent_class}'.\n\nDescription: {description}\n\nPlease provide:\n1. **Blueprint Structure**: Define the variables, functions, and events needed\n2. **Component Requirements**: List any components that should be added\n3. **Initialization Logic**: Outline what should happen in BeginPlay and construction\n4. **Core Functionality**: Describe the main functions and their implementations\n5. **Event Handlers**: Specify which events to handle and how\n6. **Dependencies**: Identify other assets or classes this Blueprint will need\n7. **Implementation Steps**: Step-by-step guide for creating the Blueprint in Unreal Editor\n8. **Testing Checklist**: Items to test once the Blueprint is created\n\nUse search_blueprints to find similar existing Blueprints for reference."
+    },
+    {
+      "name": "analyze_performance",
+      "title": "Analyze Performance",
+      "description": "Analyze the performance characteristics of a Blueprint. Identifies performance hotspots, tick analysis, memory usage, event frequency, optimization opportunities, best practices, and profiling recommendations.",
+      "arguments": [
+        {
+          "name": "blueprint_path",
+          "description": "The path to the Blueprint asset",
+          "required": true
+        }
+      ],
+      "template": "Analyze the performance of the Blueprint at '{blueprint_path}'.\n\nPlease provide:\n1. **Performance Hotspots**: Identify nodes or functions that might cause performance issues\n2. **Tick Analysis**: Review Tick event usage and suggest optimizations\n3. **Memory Usage**: Analyze variable usage and memory footprint\n4. **Event Frequency**: Identify frequently called events and their impact\n5. **Optimization Opportunities**: Suggest specific optimizations (e.g., caching, batching, reducing tick frequency)\n6. **Best Practices**: Recommend performance best practices for this Blueprint\n7. **Profiling Recommendations**: Suggest what to profile in Unreal's profiler\n\nUse export_blueprint_markdown to examine the Blueprint structure, then analyze it for performance concerns."
+    }
+  ]
+}
+

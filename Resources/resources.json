@@ -1,0 +1,18 @@
+{
+  "resources": [],
+  "resourceTemplates": [
+    {
+      "name": "Blueprint T3D Exporter",
+      "description": "Exports the T3D representation of an Unreal Engine Blueprint asset specified by its path using the unreal+t3d://{filepath} URI scheme.",
+      "mimeType": "application/vnd.unreal.t3d",
+      "uriTemplate": "unreal+t3d://{filepath}"
+    },
+    {
+      "name": "Blueprint Markdown Summary",
+      "description": "Exports the markdown representation of an Unreal Engine Blueprint asset specified by its path using the unreal+md://{filepath} URI scheme. Provides a structured summary of the Blueprint's graph, variables, functions, and events.",
+      "mimeType": "text/markdown",
+      "uriTemplate": "unreal+md://{filepath}"
+    }
+  ]
+}
+

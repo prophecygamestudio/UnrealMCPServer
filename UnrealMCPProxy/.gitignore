@@ -1,0 +1,54 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# pytest
+# Cache directories (matches at any level, including root and nested)
+**/.pytest_cache/
+.pytest_cache/
+# Coverage files
+.coverage
+.coverage.*
+htmlcov/
+*.cover
+# Other pytest-related
+.tox/
+.hypothesis/
+# Pytest cache files (if any are created outside cache directory)
+.pytest_cache
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# ruff
+.ruff_cache/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.log
+*.tmp
+
+# uv
+uv.lock
+

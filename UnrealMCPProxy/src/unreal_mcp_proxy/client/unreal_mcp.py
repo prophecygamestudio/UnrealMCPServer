@@ -6,7 +6,10 @@ import logging
 from enum import Enum
 from typing import Optional, Dict, Any
 import httpx
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from ..constants import DEFAULT_BACKEND_PORT, DEFAULT_BACKEND_TIMEOUT, DEFAULT_HEALTH_CHECK_INTERVAL
 
 logger = logging.getLogger(__name__)
 
@@ -28,8 +31,25 @@ class UnrealMCPSettings(BaseSettings):
     )
     
     host: str = "localhost"
-    port: int = 30069
-    timeout: int = 30
+    port: int = DEFAULT_BACKEND_PORT
+    timeout: int = DEFAULT_BACKEND_TIMEOUT
+    health_check_interval: int = DEFAULT_HEALTH_CHECK_INTERVAL
+    
+    @field_validator('port')
+    @classmethod
+    def validate_port(cls, v: int) -> int:
+        """Validate port is in valid range."""
+        if not (1 <= v <= 65535):
+            raise ValueError(f"Port must be between 1 and 65535, got {v}")
+        return v
+    
+    @field_validator('timeout', 'health_check_interval')
+    @classmethod
+    def validate_timeout(cls, v: int) -> int:
+        """Validate timeout is positive."""
+        if v <= 0:
+            raise ValueError(f"Timeout must be positive, got {v}")
+        return v
 
 
 class UnrealMCPClient:
@@ -54,10 +74,8 @@ class UnrealMCPClient:
         
         logger.info(f"UnrealMCPClient initialized: {self.base_url}")
         
-        # Test connection on initialization (synchronous check)
-        self._test_connection()
-        
         # Start background health check task (deferred until event loop is available)
+        # The health check loop will determine connection state asynchronously
         self._health_check_task = None
         self._health_check_started = False
     
@@ -86,11 +104,64 @@ class UnrealMCPClient:
             self._health_check_started = True
             logger.debug("Restarted background health check task")
     
+    async def _check_connection_immediate(self) -> bool:
+        """Check connection state immediately (synchronous within async context).
+        
+        This performs a quick connection test to determine initial state.
+        Uses a shorter timeout to avoid blocking too long.
+        
+        Returns:
+            True if backend is online, False otherwise
+        """
+        try:
+            # Use a shorter timeout for initial check (2 seconds)
+            import httpx
+            from ..constants import JSON_RPC_VERSION
+            
+            quick_timeout = httpx.Timeout(2.0)  # 2 second timeout for initial check
+            async with httpx.AsyncClient(timeout=quick_timeout, base_url=self.base_url) as quick_client:
+                request = {
+                    "jsonrpc": JSON_RPC_VERSION,
+                    "id": 1,
+                    "method": "tools/list",
+                    "params": {}
+                }
+                response = await quick_client.post("", json=request)
+                response.raise_for_status()
+                result = response.json()
+                # If we got a response (even with error), backend is online
+                return True
+        except (httpx.ConnectError, httpx.TimeoutException):
+            # Connection failed - backend is offline
+            return False
+        except Exception as e:
+            # Other errors might indicate backend is online but had an issue
+            # If we got any response, backend is online
+            logger.debug(f"Initial connection check had error but got response: {str(e)}")
+            return True
+    
     async def initialize_async(self):
         """Initialize async components (health check) when event loop is available.
         
+        Performs an immediate connection check to set initial state, then starts
+        the background health check loop.
+        
         Call this method after the event loop is running to start the health check.
         """
+        # First, do an immediate connection check to set initial state
+        if self.state == ConnectionState.UNKNOWN:
+            logger.debug("Performing immediate connection check...")
+            is_online = await self._check_connection_immediate()
+            if is_online:
+                self.state = ConnectionState.ONLINE
+                import time
+                self.last_known_good_connection = time.time()
+                logger.info("Backend connection verified on initialization")
+            else:
+                self.state = ConnectionState.OFFLINE
+                logger.debug("Backend appears offline on initialization")
+        
+        # Then start the background health check loop
         if not self._health_check_started:
             self._start_health_check()
     
@@ -113,54 +184,8 @@ class UnrealMCPClient:
                     logger.warning(f"Backend health check failed: {str(e)}")
                 self.state = ConnectionState.OFFLINE
             
-            # Wait before next check (use settings if available)
-            await asyncio.sleep(5)  # Default 5 seconds
-    
-    def _test_connection(self) -> bool:
-        """Test if the Unreal MCP server is reachable (synchronous, for initial check).
-        
-        Returns:
-            True if server is reachable, False otherwise.
-        """
-        test_url = f"http://{self.settings.host}:{self.settings.port}/mcp"
-        
-        try:
-            # Try a simple ping request
-            request = {
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "ping",
-                "params": {}
-            }
-            
-            # Use synchronous request for connection test
-            response = httpx.post(test_url, json=request, timeout=5)
-            
-            if response.status_code == 200:
-                result = response.json()
-                if "result" in result or "error" in result:
-                    logger.info(f"Successfully connected to Unreal MCP server at {test_url}")
-                    self.state = ConnectionState.ONLINE
-                    import time
-                    self.last_known_good_connection = time.time()
-                    return True
-            
-            logger.warning(f"Unreal MCP server at {test_url} returned unexpected response: {response.status_code}")
-            self.state = ConnectionState.OFFLINE
-            return False
-            
-        except httpx.ConnectError as e:
-            logger.warning(f"Failed to connect to Unreal MCP server at {test_url}: {e}")
-            self.state = ConnectionState.OFFLINE
-            return False
-        except httpx.TimeoutException:
-            logger.warning(f"Connection timeout to Unreal MCP server at {test_url}")
-            self.state = ConnectionState.OFFLINE
-            return False
-        except Exception as e:
-            logger.error(f"Unexpected error while testing connection to Unreal MCP server at {test_url}: {str(e)}", exc_info=True)
-            self.state = ConnectionState.OFFLINE
-            return False
+            # Wait before next check (use interval from settings)
+            await asyncio.sleep(self.settings.health_check_interval)
     
     async def call_method(self, method: str, params: Optional[Dict[str, Any]] = None, request_id: Optional[int] = None) -> Dict[str, Any]:
         """Call an MCP method on the backend server.
@@ -176,18 +201,20 @@ class UnrealMCPClient:
         Raises:
             httpx.HTTPError: If the HTTP request fails
             httpx.TimeoutException: If the request times out
+            ConnectionError: If the server is not available
         """
-        if self.state == ConnectionState.OFFLINE:
-            # Try to reconnect
-            if not self._test_connection():
-                raise ConnectionError(f"Unreal MCP server is not available at {self.base_url}")
+        # Note: We don't check state here - let the async HTTP call handle connection errors.
+        # The health check loop keeps the state updated, and the HTTP client will raise
+        # appropriate exceptions if the connection fails.
         
         if request_id is None:
             import random
             request_id = random.randint(1, 2**31 - 1)
         
+        from ..constants import JSON_RPC_VERSION
+        
         request = {
-            "jsonrpc": "2.0",
+            "jsonrpc": JSON_RPC_VERSION,
             "id": request_id,
             "method": method,
             "params": params or {}
@@ -271,68 +298,73 @@ class UnrealMCPClient:
             "arguments": arguments
         })
     
-    async def get_resources_list(self) -> Dict[str, Any]:
+    async def get_resources_list(self, cursor: Optional[str] = None) -> Dict[str, Any]:
         """Get the list of resources from the backend server.
+        
+        Args:
+            cursor: Optional cursor for pagination
         
         Returns:
             Response dictionary with resources list.
         """
-        return await self.call_method("resources/list", params={})
+        params = {}
+        if cursor:
+            params["cursor"] = cursor
+        return await self.call_method("resources/list", params=params)
     
-    async def get_resource_templates_list(self) -> Dict[str, Any]:
+    async def get_resource_templates_list(self, cursor: Optional[str] = None) -> Dict[str, Any]:
         """Get the list of resource templates from the backend server.
+        
+        Args:
+            cursor: Optional cursor for pagination
         
         Returns:
             Response dictionary with resource templates list.
         """
-        return await self.call_method("resources/templates/list", params={})
+        params = {}
+        if cursor:
+            params["cursor"] = cursor
+        return await self.call_method("resources/templates/list", params=params)
     
     async def read_resource(self, uri: str) -> Dict[str, Any]:
         """Read a resource from the backend server.
         
         Args:
-            uri: Resource URI to read
+            uri: The URI of the resource to read
         
         Returns:
-            Response dictionary with resource contents.
+            Response dictionary with resource content.
         """
         return await self.call_method("resources/read", params={"uri": uri})
     
-    async def get_prompts_list(self) -> Dict[str, Any]:
+    async def get_prompts_list(self, cursor: Optional[str] = None) -> Dict[str, Any]:
         """Get the list of prompts from the backend server.
+        
+        Args:
+            cursor: Optional cursor for pagination
         
         Returns:
             Response dictionary with prompts list.
         """
-        return await self.call_method("prompts/list", params={})
+        params = {}
+        if cursor:
+            params["cursor"] = cursor
+        return await self.call_method("prompts/list", params=params)
     
     async def get_prompt(self, name: str, arguments: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Get a prompt from the backend server.
         
         Args:
-            name: Prompt name
-            arguments: Optional prompt arguments
+            name: Name of the prompt
+            arguments: Optional arguments for the prompt
         
         Returns:
             Response dictionary with prompt messages.
         """
-        return await self.call_method("prompts/get", params={
-            "name": name,
-            "arguments": arguments or {}
-        })
-    
-    async def initialize(self, protocol_version: str = "2024-11-05") -> Dict[str, Any]:
-        """Initialize connection with the backend server.
-        
-        Args:
-            protocol_version: MCP protocol version
-        
-        Returns:
-            Response dictionary with server capabilities.
-        """
-        return await self.call_method("initialize", params={
-            "protocolVersion": protocol_version
-        })
+        params = {"name": name}
+        if arguments:
+            params["arguments"] = arguments
+        return await self.call_method("prompts/get", params=params)
     
     async def shutdown(self):
         """Shutdown the client and cancel background tasks."""

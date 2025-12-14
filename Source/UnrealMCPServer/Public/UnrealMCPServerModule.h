@@ -6,6 +6,7 @@
 #include "UMCP_AssetTools.h"
 #include "UMCP_BlueprintTools.h"
 #include "UMCP_CommonResources.h"
+#include "UMCP_CommonPrompts.h"
 #include "Modules/ModuleManager.h"
 
 // Define a log category
@@ -23,4 +24,5 @@ private:
 	TUniquePtr<FUMCP_AssetTools> AssetTools;
 	TUniquePtr<FUMCP_BlueprintTools> BlueprintTools;
 	TUniquePtr<FUMCP_CommonResources> CommonResources;
+	TUniquePtr<FUMCP_CommonPrompts> CommonPrompts;
 };

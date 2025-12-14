@@ -1,9 +1,13 @@
 {
     "mcpServers": {
-       "unreal": {
-            "name": "UnrealMCPServer",
-            "url": "http://localhost:30069/mcp",
-            "type": "Streamable HTTP"
+        "unreal-mcp-proxy": {
+            "command": "uv",
+            "args": [
+                "--directory",
+                "UnrealMCPProxy",
+                "run",
+                "src/unreal_mcp_proxy/server.py"
+            ]
         }
     }
 }
