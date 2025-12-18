@@ -1,13 +1,13 @@
 {
-    "mcpServers": {
-        "unreal-mcp-proxy": {
-            "command": "uv",
-            "args": [
-                "--directory",
-                "UnrealMCPProxy",
-                "run",
-                "src/unreal_mcp_proxy/server.py"
-            ]
-        }
-    }
-}
+	"mcpServers": {
+	  "unreal": {
+		"command": "uv",
+		"args": [
+		  "--directory",
+		  "E:\\dev\\Amber\\Main\\Phoenix\\Plugins\\UnrealMCPServer\\UnrealMCPProxy",
+		  "run",
+		  "src/unreal_mcp_proxy/server.py"
+		]
+	  }
+	}
+  }

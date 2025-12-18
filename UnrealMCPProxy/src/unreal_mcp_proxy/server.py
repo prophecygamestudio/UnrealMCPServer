@@ -211,9 +211,9 @@ async def query_asset(assetPath: str, bIncludeTags: bool = False) -> Dict[str, A
     }
 )
 @read_only
-async def search_blueprints(searchType: str, searchTerm: str, packagePath: Optional[str] = None, bRecursive: bool = True) -> Dict[str, Any]:
-    """Search for Blueprint assets based on various criteria including name patterns, parent classes, and package paths. Returns array of Blueprint asset information including paths, names, parent classes, and match details. Use 'name' searchType to find Blueprints by name pattern (e.g., 'BP_Player*'), 'parent_class' to find Blueprints that inherit from a class (e.g., 'Actor', 'Pawn', 'Character'), or 'all' for comprehensive search across all criteria."""
-    kwargs = {"searchType": searchType, "searchTerm": searchTerm, "bRecursive": bRecursive}
+async def search_blueprints(searchType: str, searchTerm: str, packagePath: Optional[str] = None, bRecursive: bool = True, maxResults: int = 0, offset: int = 0) -> Dict[str, Any]:
+    """Search for Blueprint assets based on various criteria including name patterns, parent classes, and package paths. Returns array of Blueprint asset information including paths, names, parent classes, and match details. Use 'name' searchType to find Blueprints by name pattern (e.g., 'BP_Player*'), 'parent_class' to find Blueprints that inherit from a class (e.g., 'Actor', 'Pawn', 'Character'), or 'all' for comprehensive search across all criteria. Use maxResults and offset for paging through large result sets."""
+    kwargs = {"searchType": searchType, "searchTerm": searchTerm, "bRecursive": bRecursive, "maxResults": maxResults, "offset": offset}
     if packagePath is not None:
         kwargs["packagePath"] = packagePath
     result = await _call_tool_wrapper("search_blueprints", kwargs)
@@ -276,13 +276,13 @@ async def import_asset(packagePath: str, classPath: str, filePath: Optional[str]
     }
 )
 @read_only
-async def search_assets(packagePaths: List[str], packageNames: List[str], classPaths: List[str] = None, bRecursive: bool = True, bIncludeTags: bool = False) -> Dict[str, Any]:
-    """Search for assets by package paths or package names, optionally filtered by class. Returns an array of asset information from the asset registry. More flexible than search_blueprints as it works with all asset types. REQUIRED: At least one of 'packagePaths' or 'packageNames' must be a non-empty array. Use packagePaths to search directories (e.g., '/Game/Blueprints' searches all assets in that folder), packageNames for exact package matches, and classPaths to filter by asset type (e.g., textures only). Returns array of asset information. Use bIncludeTags=true to get additional metadata tags. WARNING: Searching '/Game/' directory without class filters is extremely expensive and not allowed. Always provide at least one class filter when searching large directories."""
+async def search_assets(packagePaths: List[str], packageNames: List[str], classPaths: List[str] = None, bRecursive: bool = True, bIncludeTags: bool = False, maxResults: int = 0, offset: int = 0) -> Dict[str, Any]:
+    """Search for assets by package paths or package names, optionally filtered by class. Returns an array of asset information from the asset registry. More flexible than search_blueprints as it works with all asset types. REQUIRED: At least one of 'packagePaths' or 'packageNames' must be a non-empty array. Use packagePaths to search directories (e.g., '/Game/Blueprints' searches all assets in that folder), packageNames for exact or partial package matches (supports wildcards * and ?, or substring matching), and classPaths to filter by asset type (e.g., textures only). Returns array of asset information. Use bIncludeTags=true to get additional metadata tags. Use maxResults and offset for paging through large result sets. For large searches, use maxResults to limit results and offset for paging."""
     # Apply default for optional classPaths
     if classPaths is None:
         classPaths = []
     # Backend validates that at least one of packagePaths or packageNames is non-empty
-    result = await _call_tool_wrapper("search_assets", {"packagePaths": packagePaths, "packageNames": packageNames, "classPaths": classPaths, "bRecursive": bRecursive, "bIncludeTags": bIncludeTags})
+    result = await _call_tool_wrapper("search_assets", {"packagePaths": packagePaths, "packageNames": packageNames, "classPaths": classPaths, "bRecursive": bRecursive, "bIncludeTags": bIncludeTags, "maxResults": maxResults, "offset": offset})
     return await _handle_tool_result_wrapper("search_assets", result)
 
 @mcp.tool(

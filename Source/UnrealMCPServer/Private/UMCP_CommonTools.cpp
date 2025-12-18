@@ -521,6 +521,16 @@ bool FUMCP_CommonTools::RequestEditorCompile(TSharedPtr<FJsonObject> arguments, 
 		Result.error = FString::Printf(TEXT("Compilation timed out after %.1f seconds"), Params.timeoutSeconds);
 		Result.bSuccess = false;
 		Result.buildLog = TEXT("Compilation timed out before completion.");
+		
+		// Serialize timeout result
+		if (!UMCP_ToJsonString(Result, Content.text))
+		{
+			Content.text = TEXT("Failed to serialize timeout result");
+			return false;
+		}
+		
+		UE_LOG(LogUnrealMCPServer, Log, TEXT("RequestEditorCompile: Compilation timed out after %.1f seconds"), Params.timeoutSeconds);
+		return true;
 	}
 	else
 	{
@@ -529,21 +539,17 @@ bool FUMCP_CommonTools::RequestEditorCompile(TSharedPtr<FJsonObject> arguments, 
 		// Call Compile again to get the final result (it will return the last result if not compiling)
 		LiveCodingModule->Compile(ELiveCodingCompileFlags::None, &FinalCompileResult);
 		
-		// Handle the completion
-		return HandleCompilationComplete(LiveCodingModule, FinalCompileResult, Result, Content);
+		// Handle the completion - this will serialize the result
+		bool bHandleSuccess = HandleCompilationComplete(LiveCodingModule, FinalCompileResult, Result, Content);
+		
+		// Log the result
+		UE_LOG(LogUnrealMCPServer, Log, TEXT("RequestEditorCompile: Compilation %s (status: %s, errors: %d, warnings: %d)"), 
+			Result.bSuccess ? TEXT("succeeded") : TEXT("failed"), *Result.status, Result.errors.Num(), Result.warnings.Num());
+		
+		// Return the result from HandleCompilationComplete
+		// If it returned false, the result was already serialized with an error message
+		return bHandleSuccess;
 	}
-
-	// Convert USTRUCT to JSON string at the end
-	if (!UMCP_ToJsonString(Result, Content.text))
-	{
-		Content.text = TEXT("Failed to serialize result");
-		return false;
-	}
-
-	UE_LOG(LogUnrealMCPServer, Log, TEXT("RequestEditorCompile: Compilation %s (status: %s, errors: %d, warnings: %d)"), 
-		Result.bSuccess ? TEXT("succeeded") : TEXT("failed"), *Result.status, Result.errors.Num(), Result.warnings.Num());
-
-	return true;
 }
 
 bool FUMCP_CommonTools::HandleCompilationComplete(ILiveCodingModule* LiveCodingModule, ELiveCodingCompileResult CompileResult, FUMCP_RequestEditorCompileResult& Result, FUMCP_CallToolResultContent& Content)

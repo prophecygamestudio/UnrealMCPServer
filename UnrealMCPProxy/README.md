@@ -79,7 +79,7 @@ Add to your `mcp.json`:
 ```json
 {
   "mcpServers": {
-    "unreal-mcp-proxy": {
+    "unreal": {
       "command": "uv",
       "args": [
         "--directory",

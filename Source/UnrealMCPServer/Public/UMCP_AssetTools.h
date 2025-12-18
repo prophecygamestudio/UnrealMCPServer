@@ -226,6 +226,12 @@ struct UNREALMCPSERVER_API FUMCP_SearchAssetsParams
 
 	UPROPERTY()
 	bool bIncludeTags = false;
+
+	UPROPERTY()
+	int32 maxResults = 0;  // 0 means no limit
+
+	UPROPERTY()
+	int32 offset = 0;  // Offset for paging
 };
 
 // GetAssetDependencies tool parameters

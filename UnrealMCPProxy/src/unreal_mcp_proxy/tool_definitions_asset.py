@@ -235,26 +235,26 @@ def get_asset_tools(enable_markdown_export: bool = True) -> Dict[str, Dict[str, 
     # search_assets
     tools["search_assets"] = {
         "name": "search_assets",
-        "description": "Search for assets by package paths or package names, optionally filtered by class. Returns an array of asset information from the asset registry. More flexible than search_blueprints as it works with all asset types. Use packagePaths to search directories (e.g., '/Game/Blueprints' searches all assets in that folder), packageNames for exact package matches, and classPaths to filter by asset type (e.g., textures only). Returns array of asset information. Use bIncludeTags=true to get additional metadata tags. WARNING: Searching '/Game/' directory without class filters is extremely expensive and not allowed. Always provide at least one class filter when searching large directories.",
+        "description": "Search for assets by package paths or package names, optionally filtered by class. Returns an array of asset information from the asset registry. More flexible than search_blueprints as it works with all asset types. REQUIRED: At least one of 'packagePaths' or 'packageNames' must be provided (non-empty array). Use packagePaths to search directories (e.g., '/Game/Blueprints' searches all assets in that folder), packageNames for exact or partial package matches (supports wildcards * and ?, or substring matching), and classPaths to filter by asset type (e.g., textures only). Returns array of asset information. Use bIncludeTags=true to get additional metadata tags. Use maxResults and offset for paging through large result sets. For large searches, use maxResults to limit results and offset for paging.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "packagePaths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Array of directory/package paths to search for assets. Examples: ['/Game/Blueprints', '/Game/Materials', '/Game/Textures']. Uses Unreal's path format. Searches all assets in specified folders (recursive by default). Optional if packageNames is provided. WARNING: Searching '/Game/' without class filters is extremely expensive and blocked. Always provide classPaths when searching large directories.",
+                    "description": "REQUIRED (if packageNames is empty): Array of directory/package paths to search for assets. Examples: ['/Game/Blueprints', '/Game/Materials', '/Game/Textures']. Uses Unreal's path format. Searches all assets in specified folders (recursive by default). At least one of packagePaths or packageNames must be provided (non-empty array). For large directories, use maxResults and offset for paging.",
                     "default": []
                 },
                 "packageNames": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Array of full package names to search for. Examples: ['MyAsset', '/Game/MyAsset', '/Game/Blueprints/BP_Player']. Must be exact full package names - partial matches are not supported. Can be used instead of or in combination with packagePaths. More targeted than packagePaths as it searches for specific packages.",
+                    "description": "REQUIRED (if packagePaths is empty): Array of package names to search for. Supports both exact matches and partial matches. Examples: ['MyAsset', '/Game/MyAsset', '/Game/Blueprints/BP_Player'] for exact matches, ['BP_*', '*Player*', 'MyAsset'] for partial matches. Partial matching supports: (1) Wildcards: * (matches any characters) and ? (matches single character), e.g., 'BP_*' matches all packages starting with 'BP_'; (2) Substring matching: partial names without wildcards will match if the package name contains the substring (case-insensitive), e.g., 'Player' matches '/Game/Blueprints/BP_Player'. Can be used instead of or in combination with packagePaths. At least one of packagePaths or packageNames must be provided (non-empty array). More targeted than packagePaths as it searches for specific packages.",
                     "default": []
                 },
                 "classPaths": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Array of class paths to filter by. Examples: ['/Script/Engine.Blueprint', '/Script/Engine.Texture2D', '/Script/Engine.StaticMesh']. If empty, searches all asset types. C++ classes: '/Script/Engine.ClassName'. Blueprint classes: '/Game/Blueprints/BP_Player.BP_Player_C'. RECOMMENDED: Always provide at least one class filter when searching large directories like '/Game/' to avoid expensive operations.",
+                    "description": "Array of class paths to filter by. Examples: ['/Script/Engine.Blueprint', '/Script/Engine.Texture2D', '/Script/Engine.StaticMesh']. If empty, searches all asset types. C++ classes: '/Script/Engine.ClassName'. Blueprint classes: '/Game/Blueprints/BP_Player.BP_Player_C'. Recommended for large searches to reduce result set size.",
                     "default": []
                 },
                 "bRecursive": {
@@ -266,6 +266,16 @@ def get_asset_tools(enable_markdown_export: bool = True) -> Dict[str, Dict[str, 
                     "type": "boolean",
                     "description": "Whether to include asset tags in the response. Defaults to false. Set to true to get additional metadata tags for each asset (e.g., 'ParentClass' for Blueprints, 'TextureGroup' for textures, 'AssetImportData' for imported assets).",
                     "default": False
+                },
+                "maxResults": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return. Defaults to 0 (no limit). Use with offset for paging through large result sets. Recommended for large searches to limit response size.",
+                    "default": 0
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of results to skip before returning results. Defaults to 0. Use with maxResults for paging: first page uses offset=0, second page uses offset=maxResults, etc.",
+                    "default": 0
                 }
             },
             "required": [
@@ -295,9 +305,12 @@ def get_asset_tools(enable_markdown_export: bool = True) -> Dict[str, Dict[str, 
                     },
                     "description": "Array of asset information objects"
                 },
-                "count": {"type": "number", "description": "Total number of assets found"}
+                "count": {"type": "integer", "description": "Number of assets returned in this page"},
+                "totalCount": {"type": "integer", "description": "Total number of assets found (before paging)"},
+                "offset": {"type": "integer", "description": "Offset used for this page"},
+                "hasMore": {"type": "boolean", "description": "Whether there are more results available (true if offset + count < totalCount)"}
             },
-            "required": ["assets", "count"]
+            "required": ["assets", "count", "totalCount", "offset", "hasMore"]
         }
     }
     

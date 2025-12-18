@@ -22,6 +22,12 @@ struct UNREALMCPSERVER_API FUMCP_SearchBlueprintsParams
 
 	UPROPERTY()
 	bool bRecursive = true;
+
+	UPROPERTY()
+	int32 maxResults = 0;
+
+	UPROPERTY()
+	int32 offset = 0;
 };
 
 // ExportBlueprintMarkdown tool parameters

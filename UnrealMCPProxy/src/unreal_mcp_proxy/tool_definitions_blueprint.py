@@ -44,7 +44,18 @@ def get_blueprint_tools(enable_markdown_export: bool = True) -> Dict[str, Dict[s
                 },
                 "bRecursive": {
                     "type": "boolean",
+                    "description": "Whether to search recursively in subfolders. Defaults to true. Set to false to search only the specified packagePath directory without subdirectories.",
                     "default": True
+                },
+                "maxResults": {
+                    "type": "integer",
+                    "description": "Maximum number of results to return. Defaults to 0 (no limit). Use with offset for paging through large result sets. Recommended for large searches to limit response size.",
+                    "default": 0
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of results to skip before returning results. Defaults to 0. Use with maxResults for paging: first page uses offset=0, second page uses offset=maxResults, etc.",
+                    "default": 0
                 }
             },
             "required": ["searchType", "searchTerm"]
@@ -66,7 +77,10 @@ def get_blueprint_tools(enable_markdown_export: bool = True) -> Dict[str, Dict[s
                     },
                     "description": "Array of matching Blueprint assets"
                 },
-                "totalResults": {"type": "number", "description": "Total number of matching results"},
+                "totalResults": {"type": "number", "description": "Number of results in this page"},
+                "totalCount": {"type": "number", "description": "Total number of matching results"},
+                "offset": {"type": "number", "description": "Offset used for this page"},
+                "hasMore": {"type": "boolean", "description": "Whether there are more results available"},
                 "searchCriteria": {
                     "type": "object",
                     "description": "The search criteria used",
@@ -79,7 +93,7 @@ def get_blueprint_tools(enable_markdown_export: bool = True) -> Dict[str, Dict[s
                     "required": ["searchType", "searchTerm", "recursive"]
                 }
             },
-            "required": ["results", "totalResults", "searchCriteria"]
+            "required": ["results", "totalResults", "totalCount", "offset", "hasMore", "searchCriteria"]
         }
     }
     

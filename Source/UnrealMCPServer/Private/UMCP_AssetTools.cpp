@@ -63,6 +63,46 @@ namespace
 		// Return invalid path if we couldn't resolve it
 		return FTopLevelAssetPath();
 	}
+	
+	// Helper function to check if a package name is a partial match (contains wildcards or is not a full path)
+	bool IsPartialPackageName(const FString& PackageName)
+	{
+		// Check for wildcard characters
+		if (PackageName.Contains(TEXT("*")) || PackageName.Contains(TEXT("?")))
+		{
+			return true;
+		}
+		
+		// Check if it's not a full package path (doesn't start with /)
+		// Full package paths start with /Game/, /Engine/, etc.
+		if (!PackageName.StartsWith(TEXT("/")))
+		{
+			return true;
+		}
+		
+		// If it's a full path but contains a partial name pattern (e.g., "/Game/BP_*")
+		// we'll treat it as partial if it has wildcards (already checked above)
+		// or if it doesn't look like a complete package name
+		
+		return false;
+	}
+	
+	// Helper function to match a package name against a pattern
+	// Supports wildcards (* and ?) and substring matching
+	bool MatchesPackageNamePattern(const FString& PackageName, const FString& Pattern)
+	{
+		// Get the full package name (package path + asset name)
+		FString FullPackageName = PackageName;
+		
+		// If pattern contains wildcards, use wildcard matching
+		if (Pattern.Contains(TEXT("*")) || Pattern.Contains(TEXT("?")))
+		{
+			return FullPackageName.MatchesWildcard(Pattern, ESearchCase::IgnoreCase);
+		}
+		
+		// Otherwise, use case-insensitive substring matching
+		return FullPackageName.Contains(Pattern, ESearchCase::IgnoreCase);
+	}
 }
 
 
@@ -300,16 +340,18 @@ void FUMCP_AssetTools::Register(class FUMCP_Server* Server)
 	{
 		FUMCP_ToolDefinition Tool;
 		Tool.name = TEXT("search_assets");
-		Tool.description = TEXT("Search for assets by package paths or package names, optionally filtered by class. Returns an array of asset information from the asset registry. More flexible than search_blueprints as it works with all asset types. REQUIRED: At least one of 'packagePaths' or 'packageNames' must be provided (non-empty array). Use packagePaths to search directories (e.g., '/Game/Blueprints' searches all assets in that folder), packageNames for exact package matches, and classPaths to filter by asset type (e.g., textures only). Returns array of asset information. Use bIncludeTags=true to get additional metadata tags. WARNING: Searching '/Game/' directory without class filters is extremely expensive and not allowed. Always provide at least one class filter when searching large directories.");
+		Tool.description = TEXT("Search for assets by package paths or package names, optionally filtered by class. Returns an array of asset information from the asset registry. More flexible than search_blueprints as it works with all asset types. REQUIRED: At least one of 'packagePaths' or 'packageNames' must be provided (non-empty array). Use packagePaths to search directories (e.g., '/Game/Blueprints' searches all assets in that folder), packageNames for exact or partial package matches (supports wildcards * and ?, or substring matching), and classPaths to filter by asset type (e.g., textures only). Returns array of asset information. Use bIncludeTags=true to get additional metadata tags. Use maxResults and offset for paging through large result sets. For large searches, use maxResults to limit results and offset for paging.");
 		Tool.DoToolCall.BindRaw(this, &FUMCP_AssetTools::SearchAssets);
 		
 		// Generate input schema from USTRUCT with descriptions
 		TMap<FString, FString> InputDescriptions;
-		InputDescriptions.Add(TEXT("packagePaths"), TEXT("REQUIRED (if packageNames is empty): Array of directory/package paths to search for assets. Examples: ['/Game/Blueprints', '/Game/Materials', '/Game/Textures']. Uses Unreal's path format. Searches all assets in specified folders (recursive by default). At least one of packagePaths or packageNames must be provided (non-empty array). WARNING: Searching '/Game/' without class filters is extremely expensive and blocked. Always provide classPaths when searching large directories."));
-		InputDescriptions.Add(TEXT("packageNames"), TEXT("REQUIRED (if packagePaths is empty): Array of full package names to search for. Examples: ['MyAsset', '/Game/MyAsset', '/Game/Blueprints/BP_Player']. Must be exact full package names - partial matches are not supported. Can be used instead of or in combination with packagePaths. At least one of packagePaths or packageNames must be provided (non-empty array). More targeted than packagePaths as it searches for specific packages."));
-		InputDescriptions.Add(TEXT("classPaths"), TEXT("Array of class paths to filter by. Examples: ['/Script/Engine.Blueprint', '/Script/Engine.Texture2D', '/Script/Engine.StaticMesh']. If empty, searches all asset types. C++ classes: '/Script/Engine.ClassName'. Blueprint classes: '/Game/Blueprints/BP_Player.BP_Player_C'. RECOMMENDED: Always provide at least one class filter when searching large directories like '/Game/' to avoid expensive operations."));
+		InputDescriptions.Add(TEXT("packagePaths"), TEXT("REQUIRED (if packageNames is empty): Array of directory/package paths to search for assets. Examples: ['/Game/Blueprints', '/Game/Materials', '/Game/Textures']. Uses Unreal's path format. Searches all assets in specified folders (recursive by default). At least one of packagePaths or packageNames must be provided (non-empty array). For large directories, use maxResults and offset for paging."));
+		InputDescriptions.Add(TEXT("packageNames"), TEXT("REQUIRED (if packagePaths is empty): Array of package names to search for. Supports both exact matches and partial matches. Examples: ['MyAsset', '/Game/MyAsset', '/Game/Blueprints/BP_Player'] for exact matches, ['BP_*', '*Player*', 'MyAsset'] for partial matches. Partial matching supports: (1) Wildcards: * (matches any characters) and ? (matches single character), e.g., 'BP_*' matches all packages starting with 'BP_'; (2) Substring matching: partial names without wildcards will match if the package name contains the substring (case-insensitive), e.g., 'Player' matches '/Game/Blueprints/BP_Player'. Can be used instead of or in combination with packagePaths. At least one of packagePaths or packageNames must be provided (non-empty array). More targeted than packagePaths as it searches for specific packages."));
+		InputDescriptions.Add(TEXT("classPaths"), TEXT("Array of class paths to filter by. Examples: ['/Script/Engine.Blueprint', '/Script/Engine.Texture2D', '/Script/Engine.StaticMesh']. If empty, searches all asset types. C++ classes: '/Script/Engine.ClassName'. Blueprint classes: '/Game/Blueprints/BP_Player.BP_Player_C'. Recommended for large searches to reduce result set size."));
 		InputDescriptions.Add(TEXT("bRecursive"), TEXT("Whether to search recursively in subdirectories. Defaults to true. Set to false to search only the specified packagePaths directories without subdirectories."));
 		InputDescriptions.Add(TEXT("bIncludeTags"), TEXT("Whether to include asset tags in the response. Defaults to false. Set to true to get additional metadata tags for each asset (e.g., 'ParentClass' for Blueprints, 'TextureGroup' for textures, 'AssetImportData' for imported assets)."));
+		InputDescriptions.Add(TEXT("maxResults"), TEXT("Maximum number of results to return. Defaults to 0 (no limit). Use with offset for paging through large result sets. Recommended for large searches to limit response size."));
+		InputDescriptions.Add(TEXT("offset"), TEXT("Number of results to skip before returning results. Defaults to 0. Use with maxResults for paging: first page uses offset=0, second page uses offset=maxResults, etc."));
 		TArray<FString> InputRequired;
 		// packagePaths is required only if packageNames is empty
 		Tool.inputSchema = UMCP_GenerateJsonSchemaFromStruct<FUMCP_SearchAssetsParams>(InputDescriptions, InputRequired);
@@ -1440,31 +1482,29 @@ bool FUMCP_AssetTools::SearchAssets(TSharedPtr<FJsonObject> arguments, TArray<FU
 		}
 	}
 
-	// Validate: Prevent searches on /Game/ directory without class filters (extremely expensive)
-	// Skip this check if package names are specified, as package name searches are more targeted
-	bool bHasGamePathOnly = false;
-	if (Params.packageNames.Num() == 0 && Params.packagePaths.Num() == 1)
-	{
-		FString PackagePathStr = Params.packagePaths[0];
-		if (PackagePathStr == TEXT("/Game") || PackagePathStr == TEXT("/Game/"))
-		{
-			bHasGamePathOnly = true;
-		}
-	}
-	
-	if (bHasGamePathOnly && ClassPaths.Num() == 0)
-	{
-		Content.text = TEXT("Error: Searching /Game/ directory without class filters is not allowed as it is extremely expensive. Please provide at least one class filter in the 'classPaths' parameter, or use 'packageNames' to search by specific package names.");
-		UE_LOG(LogUnrealMCPServer, Warning, TEXT("SearchAssets: Blocked expensive /Game/ search without class filters"));
-		return false;
-	}
-
-	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchAssets: PackagePaths=%d, PackageNames=%d, ClassPaths=%d, Recursive=%s, IncludeTags=%s"), 
-		Params.packagePaths.Num(), Params.packageNames.Num(), ClassPaths.Num(), Params.bRecursive ? TEXT("true") : TEXT("false"), Params.bIncludeTags ? TEXT("true") : TEXT("false"));
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchAssets: PackagePaths=%d, PackageNames=%d, ClassPaths=%d, Recursive=%s, IncludeTags=%s, MaxResults=%d, Offset=%d"), 
+		Params.packagePaths.Num(), Params.packageNames.Num(), ClassPaths.Num(), Params.bRecursive ? TEXT("true") : TEXT("false"), Params.bIncludeTags ? TEXT("true") : TEXT("false"), Params.maxResults, Params.offset);
 
 	// Get Asset Registry
 	FAssetRegistryModule& AssetRegistryModule = FModuleManager::LoadModuleChecked<FAssetRegistryModule>("AssetRegistry");
 	IAssetRegistry& AssetRegistry = AssetRegistryModule.Get();
+
+	// Separate package names into exact matches and partial matches
+	TArray<FString> ExactPackageNames;
+	TArray<FString> PartialPackageNamePatterns;
+	
+	for (const FString& PackageNameStr : Params.packageNames)
+	{
+		if (IsPartialPackageName(PackageNameStr))
+		{
+			PartialPackageNamePatterns.Add(PackageNameStr);
+			UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchAssets: Detected partial package name pattern: %s"), *PackageNameStr);
+		}
+		else
+		{
+			ExactPackageNames.Add(PackageNameStr);
+		}
+	}
 
 	// Build filter
 	FARFilter Filter;
@@ -1476,8 +1516,8 @@ bool FUMCP_AssetTools::SearchAssets(TSharedPtr<FJsonObject> arguments, TArray<FU
 	}
 	Filter.bRecursivePaths = Params.bRecursive;
 	
-	// Add package names from USTRUCT
-	for (const FString& PackageNameStr : Params.packageNames)
+	// Add only exact package names to filter (partial matches will be post-filtered)
+	for (const FString& PackageNameStr : ExactPackageNames)
 	{
 		Filter.PackageNames.Add(FName(*PackageNameStr));
 	}
@@ -1488,19 +1528,84 @@ bool FUMCP_AssetTools::SearchAssets(TSharedPtr<FJsonObject> arguments, TArray<FU
 		Filter.ClassPaths = ClassPaths;
 		Filter.bRecursiveClasses = true;
 	}
+	
+	// If we have partial package name patterns but no package paths or class filters,
+	// we need to require at least one to avoid expensive full asset registry searches.
+	// Partial package name searches require a search scope to filter from.
+	if (PartialPackageNamePatterns.Num() > 0 && Filter.PackagePaths.Num() == 0 && ClassPaths.Num() == 0 && ExactPackageNames.Num() == 0)
+	{
+		Content.text = TEXT("Error: Partial package name searches require either packagePaths or classPaths to define the search scope. This prevents expensive full asset registry searches. Please provide at least one package path or class filter when using partial package name patterns.");
+		UE_LOG(LogUnrealMCPServer, Warning, TEXT("SearchAssets: Blocked partial package name search without package paths or class filters"));
+		return false;
+	}
 
 	// Perform asset search
 	TArray<FAssetData> AssetDataList;
 	AssetRegistry.GetAssets(Filter, AssetDataList);
 
-	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchAssets: Found %d assets"), AssetDataList.Num());
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchAssets: Found %d assets before partial name filtering"), AssetDataList.Num());
+	
+	// Post-filter results for partial package name patterns
+	if (PartialPackageNamePatterns.Num() > 0)
+	{
+		TArray<FAssetData> FilteredAssetDataList;
+		
+		for (const FAssetData& AssetData : AssetDataList)
+		{
+			// Get the full package name (package path + asset name)
+			FString FullPackageName = AssetData.PackageName.ToString();
+			
+			// Check if this asset matches any of the partial patterns
+			bool bMatchesAnyPattern = false;
+			for (const FString& Pattern : PartialPackageNamePatterns)
+			{
+				if (MatchesPackageNamePattern(FullPackageName, Pattern))
+				{
+					bMatchesAnyPattern = true;
+					break;
+				}
+			}
+			
+			if (bMatchesAnyPattern)
+			{
+				FilteredAssetDataList.Add(AssetData);
+			}
+		}
+		
+		AssetDataList = MoveTemp(FilteredAssetDataList);
+		UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchAssets: Found %d assets after partial name filtering"), AssetDataList.Num());
+	}
+
+	// Apply paging: calculate total count before limiting
+	int32 TotalCount = AssetDataList.Num();
+	int32 StartIndex = FMath::Max(0, Params.offset);
+	int32 EndIndex = AssetDataList.Num();
+	
+	// Apply maxResults limit if specified
+	if (Params.maxResults > 0)
+	{
+		EndIndex = FMath::Min(StartIndex + Params.maxResults, AssetDataList.Num());
+	}
+	
+	// Extract the page of results
+	TArray<FAssetData> PagedAssetDataList;
+	if (StartIndex < AssetDataList.Num())
+	{
+		for (int32 i = StartIndex; i < EndIndex; ++i)
+		{
+			PagedAssetDataList.Add(AssetDataList[i]);
+		}
+	}
+	
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchAssets: Returning %d assets (offset=%d, maxResults=%d, total=%d)"), 
+		PagedAssetDataList.Num(), Params.offset, Params.maxResults, TotalCount);
 
 	// Build results - output has complex nested structure, so we build JSON manually
 	// but we've used USTRUCT for all input processing
 	TSharedPtr<FJsonObject> ResultsJson = MakeShareable(new FJsonObject);
 	TArray<TSharedPtr<FJsonValue>> AssetsArray;
 
-	for (const FAssetData& AssetData : AssetDataList)
+	for (const FAssetData& AssetData : PagedAssetDataList)
 	{
 		TSharedPtr<FJsonObject> AssetJson = MakeShareable(new FJsonObject);
 		AssetDataToJson(AssetData, AssetJson, Params.bIncludeTags);
@@ -1509,6 +1614,9 @@ bool FUMCP_AssetTools::SearchAssets(TSharedPtr<FJsonObject> arguments, TArray<FU
 
 	ResultsJson->SetArrayField(TEXT("assets"), AssetsArray);
 	ResultsJson->SetNumberField(TEXT("count"), AssetsArray.Num());
+	ResultsJson->SetNumberField(TEXT("totalCount"), TotalCount);
+	ResultsJson->SetNumberField(TEXT("offset"), Params.offset);
+	ResultsJson->SetBoolField(TEXT("hasMore"), EndIndex < TotalCount);
 
 	// Convert to JSON string
 	FString ResultJsonString;

@@ -1,6 +1,6 @@
 {
     "mcpServers": {
-        "unreal-mcp-proxy": {
+        "unreal": {
             "command": "uv",
             "args": [
                 "--directory",

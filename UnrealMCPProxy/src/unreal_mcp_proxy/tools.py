@@ -117,9 +117,15 @@ async def call_tool_with_retry(
     is_read_only = is_read_only_tool(tool_name, proxy_tool_definition, tool_function)
     
     if not is_read_only:
-        # For write operations, call once without retry
-        logger.debug(f"Tool '{tool_name}' is a write operation - no retry on errors")
-        return await client.call_tool(tool_name, arguments)
+        # For write operations, call once without retry - NEVER retry write operations
+        logger.debug(f"Tool '{tool_name}' is a write operation - calling once without retry (no retries on any errors)")
+        try:
+            response = await client.call_tool(tool_name, arguments)
+            return response
+        except Exception as e:
+            # For write operations, never retry - just raise the exception immediately
+            logger.error(f"Tool '{tool_name}' (write operation) failed - not retrying: {str(e)}", exc_info=True)
+            raise
     
     # For read-only operations, retry on transient errors
     last_exception = None

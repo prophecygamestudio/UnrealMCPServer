@@ -262,16 +262,16 @@ While field order doesn't affect functionality, maintaining a consistent order m
 
 **Example from `search_assets` (Proxy Implementation)**:
 ```python
-"packagePaths": {
-    "type": "array",
-    "items": {"type": "string"},
-    "description": "Array of directory/package paths to search for assets. ... At least one of packagePaths or packageNames must be provided. WARNING: ...",
-    "default": []
-},
+    "packagePaths": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Array of directory/package paths to search for assets. Examples: ['/Game/Blueprints', '/Game/Materials']. At least one of packagePaths or packageNames must be provided. For large directories, use maxResults and offset for paging.",
+        "default": []
+    },
 "packageNames": {
     "type": "array",
     "items": {"type": "string"},
-    "description": "Array of full package names to search for. ... At least one of packagePaths or packageNames must be provided. ...",
+    "description": "Array of package names to search for. Supports both exact matches and partial matches. Examples: ['MyAsset', '/Game/MyAsset'] for exact matches, ['BP_*', '*Player*', 'MyAsset'] for partial matches. Partial matching supports: (1) Wildcards: * (matches any characters) and ? (matches single character); (2) Substring matching: partial names without wildcards match if package name contains the substring (case-insensitive). NOTE: Partial searches require packagePaths or classPaths to define search scope. At least one of packagePaths or packageNames must be provided.",
     "default": []
 },
 "required": [
@@ -288,6 +288,72 @@ While field order doesn't affect functionality, maintaining a consistent order m
 3. Use clear language in descriptions: "At least one of X or Y must be provided"
 4. State the requirement prominently in the tool description
 5. This is a case where proxy improves on backend schema for better agent interaction
+
+### 6. Partial Package Name Search Support
+
+**Feature**: The `search_assets` tool supports partial package name matching in addition to exact matches. This allows searching for assets using wildcards or substring patterns.
+
+**How It Works**:
+- **Exact Matches**: Full package names (e.g., `/Game/Blueprints/BP_Player`) are matched directly using Unreal's asset registry
+- **Partial Matches**: Package names with wildcards or partial patterns are detected and filtered post-search
+  - **Wildcard Matching**: Supports `*` (matches any characters) and `?` (matches single character)
+    - Example: `BP_*` matches all packages starting with `BP_`
+    - Example: `*Player*` matches any package containing `Player`
+  - **Substring Matching**: Partial names without wildcards use case-insensitive substring matching
+    - Example: `Player` matches `/Game/Blueprints/BP_Player`
+    - Example: `MyAsset` matches `/Game/MyAsset` and `/Game/Blueprints/MyAsset_Blueprint`
+
+**Detection Logic**:
+- A package name is considered "partial" if:
+  - It contains wildcard characters (`*` or `?`), OR
+  - It doesn't start with `/` (not a full package path)
+- Full package paths starting with `/` are treated as exact matches unless they contain wildcards
+
+**Important Requirements for Partial Searches**:
+- **Partial package name searches require a search scope** to prevent expensive full asset registry scans
+- Must provide at least one of:
+  - `packagePaths`: Directory paths to search within (e.g., `['/Game/Blueprints']`)
+  - `classPaths`: Class filters to limit asset types (e.g., `['/Script/Engine.Blueprint']`)
+- If only partial `packageNames` are provided without `packagePaths` or `classPaths`, the backend will return an error: "Partial package name searches require either packagePaths or classPaths to define the search scope"
+
+**Example Usage**:
+```python
+# Valid: Partial search with package path scope
+search_assets(
+    packagePaths=["/Game/Blueprints"],
+    packageNames=["BP_*"],  # Find all Blueprints starting with "BP_"
+    classPaths=["/Script/Engine.Blueprint"]
+)
+
+# Valid: Partial search with class filter scope
+search_assets(
+    packageNames=["*Player*"],  # Find any package containing "Player"
+    classPaths=["/Script/Engine.Blueprint"]
+)
+
+# Invalid: Partial search without scope (will error)
+search_assets(
+    packageNames=["BP_*"]  # Missing packagePaths or classPaths
+)
+
+# Valid: Mix of exact and partial matches
+search_assets(
+    packagePaths=["/Game/Blueprints"],
+    packageNames=["BP_Player", "BP_*", "*Enemy*"],  # Mix of exact and partial
+    classPaths=["/Script/Engine.Blueprint"]
+)
+```
+
+**Implementation Details**:
+- Backend separates `packageNames` into exact matches and partial patterns
+- Exact matches are added to the asset registry filter (efficient)
+- Partial patterns are applied as post-filters on search results
+- This hybrid approach balances performance (exact matches use registry filtering) with flexibility (partial matches support wildcards and substrings)
+
+**Documentation Requirements**:
+- Tool descriptions should clearly state: "Supports both exact matches and partial matches (wildcards * and ?, or substring matching)"
+- Field descriptions should explain both wildcard and substring matching with examples
+- Should warn about the requirement for `packagePaths` or `classPaths` when using partial searches
 
 ## What Changed: Compatibility vs Exact Matching
 

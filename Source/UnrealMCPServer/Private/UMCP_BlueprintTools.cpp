@@ -28,6 +28,8 @@ void FUMCP_BlueprintTools::Register(class FUMCP_Server* Server)
 		InputDescriptions.Add(TEXT("searchTerm"), TEXT("Search term to match against. For 'name' type: Blueprint name pattern (e.g., 'BP_Player', 'Enemy'). For 'parent_class' type: Parent class name (e.g., 'Actor', 'Pawn', 'Character'). For 'all' type: Searches both name and parent class."));
 		InputDescriptions.Add(TEXT("packagePath"), TEXT("Optional package path to limit search scope. Examples: '/Game/Blueprints' searches in Blueprints folder, '/Game/Characters' searches in Characters folder. Uses Unreal's path format. If not specified, searches entire project."));
 		InputDescriptions.Add(TEXT("bRecursive"), TEXT("Whether to search recursively in subfolders. Defaults to true. Set to false to search only the specified packagePath directory without subdirectories."));
+		InputDescriptions.Add(TEXT("maxResults"), TEXT("Maximum number of results to return. Defaults to 0 (no limit). Use with offset for paging through large result sets. Recommended for large searches to limit response size."));
+		InputDescriptions.Add(TEXT("offset"), TEXT("Number of results to skip before returning results. Defaults to 0. Use with maxResults for paging: first page uses offset=0, second page uses offset=maxResults, etc."));
 		TArray<FString> InputRequired;
 		InputRequired.Add(TEXT("searchType"));
 		InputRequired.Add(TEXT("searchTerm"));
@@ -46,7 +48,10 @@ void FUMCP_BlueprintTools::Register(class FUMCP_Server* Server)
 			TEXT("\"parentClass\":{\"type\":\"string\"},")
 			TEXT("\"matches\":{\"type\":\"array\",\"items\":{\"type\":\"object\"}}")
 			TEXT("}}},")
-			TEXT("\"totalResults\":{\"type\":\"number\",\"description\":\"Total number of matching results\"},")
+			TEXT("\"totalResults\":{\"type\":\"number\",\"description\":\"Number of results in this page\"},")
+			TEXT("\"totalCount\":{\"type\":\"number\",\"description\":\"Total number of matching results\"},")
+			TEXT("\"offset\":{\"type\":\"number\",\"description\":\"Offset used for this page\"},")
+			TEXT("\"hasMore\":{\"type\":\"boolean\",\"description\":\"Whether there are more results available\"},")
 			TEXT("\"searchCriteria\":{\"type\":\"object\",\"description\":\"The search criteria used\",\"properties\":{")
 			TEXT("\"searchType\":{\"type\":\"string\"},")
 			TEXT("\"searchTerm\":{\"type\":\"string\"},")
@@ -54,7 +59,7 @@ void FUMCP_BlueprintTools::Register(class FUMCP_Server* Server)
 			TEXT("\"recursive\":{\"type\":\"boolean\"}")
 			TEXT("},\"required\":[\"searchType\",\"searchTerm\",\"recursive\"]")
 			TEXT("}},")
-			TEXT("\"required\":[\"results\",\"totalResults\",\"searchCriteria\"]")
+			TEXT("\"required\":[\"results\",\"totalResults\",\"totalCount\",\"offset\",\"hasMore\",\"searchCriteria\"]")
 			TEXT("}");
 		TSharedPtr<FJsonObject> ParsedSchema = UMCP_FromJsonStr(SearchOutputSchema);
 		if (ParsedSchema.IsValid())
@@ -166,9 +171,8 @@ bool FUMCP_BlueprintTools::SearchBlueprints(TSharedPtr<FJsonObject> arguments, T
 
 	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchBlueprints: Found %d Blueprint assets before filtering"), AssetDataList.Num());
 
-	// Build results JSON
-	TSharedPtr<FJsonObject> ResultsJson = MakeShareable(new FJsonObject);
-	TArray<TSharedPtr<FJsonValue>> ResultsArray;
+	// Build all matching results first (before paging)
+	TArray<TSharedPtr<FJsonValue>> AllResultsArray;
 	int32 TotalMatches = 0;
 
 	for (const FAssetData& AssetData : AssetDataList)
@@ -231,14 +235,42 @@ bool FUMCP_BlueprintTools::SearchBlueprints(TSharedPtr<FJsonObject> arguments, T
 			
 			BlueprintResult->SetArrayField(TEXT("matches"), MatchesArray);
 			
-			ResultsArray.Add(MakeShareable(new FJsonValueObject(BlueprintResult)));
+			AllResultsArray.Add(MakeShareable(new FJsonValueObject(BlueprintResult)));
 		}
 	}
 
+	// Apply paging: calculate total count before limiting
+	int32 TotalCount = TotalMatches;
+	int32 StartIndex = FMath::Max(0, Params.offset);
+	int32 EndIndex = AllResultsArray.Num();
+	
+	// Apply maxResults limit if specified
+	if (Params.maxResults > 0)
+	{
+		EndIndex = FMath::Min(StartIndex + Params.maxResults, AllResultsArray.Num());
+	}
+	
+	// Extract the page of results
+	TArray<TSharedPtr<FJsonValue>> PagedResultsArray;
+	if (StartIndex < AllResultsArray.Num())
+	{
+		for (int32 i = StartIndex; i < EndIndex; ++i)
+		{
+			PagedResultsArray.Add(AllResultsArray[i]);
+		}
+	}
+	
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchBlueprints: Returning %d results (offset=%d, maxResults=%d, total=%d)"), 
+		PagedResultsArray.Num(), Params.offset, Params.maxResults, TotalCount);
+
 	// Build final result JSON - output has complex nested structure, so we build JSON manually
 	// but we've used USTRUCT for all input processing
-	ResultsJson->SetArrayField(TEXT("results"), ResultsArray);
-	ResultsJson->SetNumberField(TEXT("totalResults"), TotalMatches);
+	TSharedPtr<FJsonObject> ResultsJson = MakeShareable(new FJsonObject);
+	ResultsJson->SetArrayField(TEXT("results"), PagedResultsArray);
+	ResultsJson->SetNumberField(TEXT("totalResults"), PagedResultsArray.Num());
+	ResultsJson->SetNumberField(TEXT("totalCount"), TotalCount);
+	ResultsJson->SetNumberField(TEXT("offset"), Params.offset);
+	ResultsJson->SetBoolField(TEXT("hasMore"), EndIndex < TotalCount);
 	
 	TSharedPtr<FJsonObject> SearchCriteriaJson = MakeShareable(new FJsonObject);
 	SearchCriteriaJson->SetStringField(TEXT("searchType"), Params.searchType);
@@ -257,7 +289,7 @@ bool FUMCP_BlueprintTools::SearchBlueprints(TSharedPtr<FJsonObject> arguments, T
 
 	Content.text = ResultJsonString;
 	
-	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchBlueprints: Completed search, found %d matches"), TotalMatches);
+	UE_LOG(LogUnrealMCPServer, Log, TEXT("SearchBlueprints: Completed search, found %d matches (returning %d)"), TotalCount, PagedResultsArray.Num());
 	
 	return true;
 }
